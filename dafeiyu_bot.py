@@ -1,0 +1,672 @@
+# -*- coding: utf-8 -*-
+"""「大肥鱼」微信群 AI 机器人。
+
+群里有人 @大肥鱼 时，把问题发给自建 LLM（OpenAI 兼容接口），再把回答发回群里。
+基于 wechatauto 的全局消息监听（db.Listener，纯数据库轮询，收消息不需要动窗口），
+只有「回话」那一刻才会驱动微信窗口。每个群有长期记忆：对话无上限累积，
+估算上下文到 CONTEXT_TOKEN_LIMIT（默认 100K token）时自动把最老的历史
+压成摘要（最近几轮永远保留原文）。被 @ 回答时还会附上该群最近
+RECENT_N 条群消息当上下文，没聊过天也能接得上话。@ 过一次后进入
+跟进对话：FOLLOWUP_WINDOW 秒内的群消息免 @ 直接回答，每答一轮续一次
+窗口，冷场超时后需要重新 @（期间有人在 @ 别人的消息不会抢答）。
+
+内置 agent 工具循环：LLM 可调用 search_group_messages 搜索最近
+SEARCH_DAYS 天的群聊消息（关键词/成员/群名，为空=全部，上限 2000 条）。
+
+用法：
+    python dafeiyu_bot.py            # 启动机器人，Ctrl+C 退出
+    python dafeiyu_bot.py --test "在吗"   # 不连微信，只测 LLM 链路
+    python dafeiyu_bot.py --search "关键词" [--member 名] [--group 群]
+
+依赖：pip install -e . （wechatauto 本体），LLM 调用只用标准库。
+日志：控制台照常输出，同时落盘到脚本同目录 dafeiyu_bot.log
+（5MB 滚动，保留 2 份历史），每行带时间戳。
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import threading
+import time
+import urllib.request
+from collections import deque
+
+from wechatauto import WeChat
+
+# ------------------------- 配置区 -------------------------
+
+# LLM 节点池（OpenAI 兼容 /chat/completions 接口）：粘住一台用（保 prefix
+# cache 命中），失败/乱码才向后切换，切换成功后粘住新的。
+# 通过环境变量配置，逗号分隔多个节点做故障转移；也可以直接改这里。
+#   WECHAT_DEEPSEEK_API_HOSTS  例：10.0.0.14,10.0.0.11
+#   WECHAT_DEEPSEEK_API_PORT   例：8000
+#   WECHAT_DEEPSEEK_API_KEY    本地部署随便填，如 EMPTY
+#   WECHAT_DEEPSEEK_MODEL      例：deepseek-v4
+API_HOSTS = [
+    h.strip() for h in os.environ.get(
+        'WECHAT_DEEPSEEK_API_HOSTS', '127.0.0.1').split(',') if h.strip()
+]
+API_PORT = int(os.environ.get('WECHAT_DEEPSEEK_API_PORT', '8000'))
+API_KEY = os.environ.get('WECHAT_DEEPSEEK_API_KEY', 'EMPTY')
+MODEL = os.environ.get('WECHAT_DEEPSEEK_MODEL', 'deepseek-v4')
+
+AT_NAME = '大肥鱼'          # 触发词：消息里包含 "@大肥鱼" 才回答
+FOLLOWUP_WINDOW = 300       # 跟进对话窗口（秒）：@ 过一次后，窗口内群里
+                            # 的消息免 @ 直接回答；每次回复都刷新倒计时，
+                            # 冷静 FOLLOWUP_WINDOW 秒后需要重新 @
+RECENT_N = 20               # 被 @ 回答时附带的「最近群消息」条数
+RECENT_LINE_MAX = 200       # 群消息日志里单条消息截断长度，防长文刷爆上下文
+
+# -- 群消息搜索工具（LLM 可调用，也可 --search 命令行直用）----------------
+SEARCH_DAYS = 3             # 搜索窗口：最近几天
+SEARCH_MAX_RESULTS = 2000   # 返回上限：最多多少条（超出保留最新的）
+SEARCH_RESULT_MAX_CHARS = 60_000   # 塞给模型的结果长度上限（防撑爆上下文）
+SEARCH_PAGE = 500           # 每个群分页拉取的步长
+SEARCH_ROOM_LIMIT = 300     # 最多扫多少个群（按会话列表取前 N）
+SEARCH_ROOM_PAGE_CAP = 20000   # 每个群最多回溯多少条
+TOOL_ROUNDS = 4             # 单次回答允许的工具调用轮数
+
+# -- 日志 ----------------------------------------------------------------
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'dafeiyu_bot.log')
+LOG_MAX_BYTES = 5_000_000   # 单文件 5MB，超出滚动成 .1/.2
+LOG_KEEP = 2                # 保留几个历史日志文件
+
+CONTEXT_TOKEN_LIMIT = 100_000   # 群聊上下文估算 token 数到这个值就压缩历史
+COMPRESS_KEEP_TURNS = 4         # 压缩时保留最近几轮原对话不压
+SUMMARY_MAX_TOKENS = 1500       # 压缩摘要的长度上限
+LLM_TIMEOUT = 90            # 单节点请求超时（秒）
+MAX_TOKENS = 600
+
+SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸鱼娘（前身「防火女」，现在活泼爱偷吃，偶尔穿女仆装），在微信群里当助手。
+
+## 说话方式（最重要）
+- 默认说人话：像靠谱的同事一样，清楚、自然、直接地把问题答好，不演不装。
+- 只有纯闲聊、斗嘴、被开玩笑时才用一点人设腔（俏皮、傲娇、爱吃小鱼干），点到为止，最多一两句。
+- 回答技术问题、帮忙办事、总结信息时：零梗零卖萌，直接给内容、给结论。
+- 正常用「我」自称，别每句都"本鱼"；"翻肚皮""游走了"这类梗闲聊里偶尔一个就够，不许堆。
+- 被叫「大肥鱼」可以嘴硬一句「才不是！」，然后照常好好回答。
+
+## 输出格式（微信纯文本，必须遵守）
+- 这里是微信聊天输入框，纯文本环境：禁止一切 Markdown。不要 **加粗**、不要 # 标题、不要以 - 或 * 开头的列表、不要代码块围栏。
+- 需要分点就用「1．2．3．」编号或自然段分行；代码/命令直接贴成纯文本行，别加围栏。
+- 不要输出半角星号 *、井号 #、反引号 ` 这些符号，它们在微信里显示出来就是乱码。
+
+## 硬性规则
+- 先办对事，再卖萌：任务正确性 > 人设。代码、命令、结论必须准确。
+- 不真骂人：吐槽点到为止，绝不人身攻击。
+- 短话优先：闲聊别啰嗦；长技术回答里，人设只出现在开头/结尾的包裹层，不污染代码块/命令/数据。
+- 中文为主：默认中文；用户用其他语言时跟随，但保留贱萌语气。
+- 需要严肃回答时，用户说"别演了/正经点"就退出人设。
+
+你在微信群里，别人@你就是在跟你说话。回答就是直接发到群里的微信消息，不要用 markdown 标题、不要列清单符号堆砌，口语化一点。
+
+## 工具
+- 消息开头的「【昵称】」标记表示这句话是谁发的。
+- 你可以调用 search_group_messages 工具：搜索【当前这个群】最近 3 天的消息。参数 keyword（按消息内容）、member（按发送者昵称/备注/wxid）都可选，都不填=返回本群全部（最多 2000 条）。只能搜本群，别的群搜不到。
+- 被问「群里之前聊了什么 / 谁提过 X / 某人发过什么」这类问题时，先调工具搜证据再回答，别凭印象编；引用时带上时间。没搜到就直说没搜到。
+- 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
+- 回复要点名某个人时，把回答写成「@昵称 你的回答」开头（昵称用【】里的名字，不要自己编），系统会把它转成真正的@提醒对方。默认规则：别人正经问你问题、求帮忙、点名说话，回答一律以「@昵称 」开头；只有接着同一话题连续斗嘴、明显不需要指名时才省略。"""
+
+FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
+
+# 暴露给 LLM 的工具：群消息搜索（实现在 DaFeiYuBot.search_group_messages）
+# 只开放「当前会话」范围：跨群搜索会让 A 群的回复混进 B 群的内容（实测事故），
+# 模侧不给跨群入口；命令行 --search 仍可全量搜。
+SEARCH_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'search_group_messages',
+        'description': (
+            '搜索当前会话（本群）最近3天的消息。keyword=按消息内容搜，'
+            'member=按发送者昵称/备注/wxid搜；都不填=返回本群全部消息。'
+            '最多返回2000条（超出保留最新的）。只能搜本群，搜不了别的群。'
+            '只在需要查本群历史时调用。'),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'keyword': {'type': 'string', 'description': '消息内容关键词'},
+                'member': {'type': 'string',
+                           'description': '发送者昵称/备注/wxid'},
+            },
+        },
+    },
+}
+
+# -----------------------------------------------------------
+
+
+class _Tee:
+    """行缓冲的 stdout/stderr 镜像：终端照常显示，同时落盘到 LOG_FILE。
+
+    没带时间戳的行（bot 自己的 print）补上时间前缀；wechatauto 库日志
+    本来就带 `YYYY-MM-DD` 前缀，原样保留。文件超 LOG_MAX_BYTES 滚动。
+    """
+
+    _TS_RE = re.compile(r'^\d{4}-\d{2}-\d{2} ')
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._buf = ''
+
+    def write(self, s):
+        self._buf += s
+        while '\n' in self._buf:
+            line, self._buf = self._buf.split('\n', 1)
+            self._emit(line)
+        return len(s)
+
+    def _emit(self, line):
+        if not self._TS_RE.match(line):
+            line = time.strftime('[%m-%d %H:%M:%S] ') + line
+        text = line + '\n'
+        try:
+            self._stream.write(text)
+            self._stream.flush()
+        except Exception:
+            pass
+        try:
+            self._rotate_if_needed()
+            with open(LOG_FILE, 'a', encoding='utf-8') as f:
+                f.write(text)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _rotate_if_needed():
+        try:
+            if os.path.getsize(LOG_FILE) < LOG_MAX_BYTES:
+                return
+            for i in range(LOG_KEEP - 1, 0, -1):
+                src = f'{LOG_FILE}.{i}'
+                if os.path.exists(src):
+                    os.replace(src, f'{LOG_FILE}.{i + 1}')
+            os.replace(LOG_FILE, LOG_FILE + '.1')
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+
+    def isatty(self):
+        return False
+
+
+def _setup_logging() -> None:
+    sys.stdout = _Tee(sys.stdout)
+    sys.stderr = _Tee(sys.stderr)
+
+
+def _looks_garbled(text: str) -> bool:
+    """粗筛乱码：正常中文/代码/标点以外的怪符号占比过高就换节点重试。"""
+    if len(text) < 8:
+        return False
+    ok = 0
+    for ch in text:
+        if (ch.isalnum() or ch.isspace()
+                or '\u4e00' <= ch <= '\u9fff'      # 汉字
+                or '\u3000' <= ch <= '\u303f'      # CJK 标点
+                or '\uff00' <= ch <= '\uffef'      # 全角标点
+                or ch in '.,!?;:\'"()[]{}<>/*-+=#@&%$_|~`^\\\n'
+                or ord(ch) > 0x1F000):             # emoji 等
+            ok += 1
+    return ok / len(text) < 0.88
+
+
+def est_tokens(text: str) -> int:
+    """粗估 token 数（宁大勿小，早压缩总比撑爆上下文强）。
+
+    中文按 1 字 ≈ 1 token，其余按 3 字符 ≈ 1 token——都比 DeepSeek 实际
+    切词偏保守，100K 的阈值在真实 131K 窗口里有充足余量。
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+    return cjk + (len(text) - cjk) // 3 + 1
+
+
+class LLMClient:
+    """多节点轮询的 Chat Completions 客户端（标准库实现，零依赖）。"""
+
+    def __init__(self):
+        self._start = 0
+        self._lock = threading.Lock()
+
+    def chat_raw(self, messages: list, tools: list = None,
+                 temperature: float = 0.7,
+                 max_tokens: int = MAX_TOKENS) -> dict:
+        """粘性故障转移请求，返回完整的 assistant message dict。
+
+        粘性节点：成功后 _start 停在赢家上，后续请求都打同一台机子——
+        vLLM 的 prefix caching 按实例存 KV，来回换节点等于每次全量重算。
+        只有当前节点报错/乱码才向后故障转移，转移成功后粘住新节点。
+        """
+        with self._lock:                       # 串行化：失败换节点时推进起点
+            start = self._start
+        last_err = None
+        for i in range(len(API_HOSTS)):
+            host = API_HOSTS[(start + i) % len(API_HOSTS)]
+            try:
+                m = self._request(host, messages, tools, temperature, max_tokens)
+                # 带工具调用的回复没有正文，乱码检查只看纯文本回答
+                if (not m.get('tool_calls')
+                        and _looks_garbled(m.get('content') or '')):
+                    print(f'[llm] {host} 返回疑似乱码，换下一个节点')
+                    last_err = RuntimeError('garbled')
+                    continue
+                with self._lock:
+                    self._start = (start + i) % len(API_HOSTS)
+                return m
+            except Exception as e:
+                print(f'[llm] {host} 失败：{e}')
+                last_err = e
+        raise last_err or RuntimeError('所有节点均失败')
+
+    def chat(self, messages: list, temperature: float = 0.7,
+             max_tokens: int = MAX_TOKENS) -> str:
+        """纯文本问答（不带工具），返回最终文本。"""
+        m = self.chat_raw(messages, None, temperature, max_tokens)
+        return (m.get('content') or '').strip()
+
+    def _request(self, host: str, messages: list, tools: list,
+                 temperature: float, max_tokens: int) -> dict:
+        payload = {'model': MODEL, 'messages': messages,
+                   'temperature': temperature, 'max_tokens': max_tokens}
+        if tools:
+            payload['tools'] = tools
+        req = urllib.request.Request(
+            f'http://{host}:{API_PORT}/v1/chat/completions',
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={'Content-Type': 'application/json',
+                     'Authorization': f'Bearer {API_KEY}'})
+        with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as r:
+            out = json.loads(r.read())
+        return out['choices'][0]['message'] or {}
+
+
+_GROUP_PREFIX_RE = None    # 延迟编译：群消息正文前的 "wxid_xxx:\n" 发送者前缀
+
+
+def _strip_group_prefix(text: str) -> str:
+    """去掉群消息正文开头的发送者前缀（wxid_xxx:\n），没有就原样返回。"""
+    global _GROUP_PREFIX_RE
+    if _GROUP_PREFIX_RE is None:
+        import re
+        _GROUP_PREFIX_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_-]{5,31}:\n')
+    return _GROUP_PREFIX_RE.sub('', text, count=1)
+
+
+class DaFeiYuBot:
+    def __init__(self):
+        self.llm = LLMClient()
+        # 每个群一份长期记忆：{'summary': 历史压缩摘要, 'turns': [(问, 答), ...]}
+        # turns 无上限累积，估算上下文超过 CONTEXT_TOKEN_LIMIT 时把最老的
+        # 一批压进 summary（最近 COMPRESS_KEEP_TURNS 轮永远保留原文）。
+        self.memory = {}
+        # 每个会话一份围观记录：deque[(发送者, 文本)]，所有消息都记，
+        # 被 @ 时取最近 RECENT_N 条附进上下文（不含触发消息本身）。
+        self.recent = {}
+        # 跟进对话状态：chat_id -> 免 @ 回答的截止时间戳
+        self.followup_until = {}
+        self.paused = False               # 发送失败后置 True，暂停应答防继续乱动界面
+        self._db = None                    # 搜索工具用的 WeChatDB，按需打开
+        self.send_lock = threading.Lock()   # 回话驱动 GUI，必须串行
+
+    # -- 围观记录 -------------------------------------------------------
+
+    def _record(self, msg, chat) -> None:
+        buf = self.recent.setdefault(getattr(chat, 'who', ''), deque(maxlen=RECENT_N))
+        if msg.type in ('text', '文本'):
+            text = _strip_group_prefix(msg.content or '').strip()
+        else:
+            text = f'[{msg.type}]'          # 图片/文件等只留类型占位
+        if text:
+            buf.append((getattr(msg, 'sender', '') or '有人', text[:RECENT_LINE_MAX]))
+
+    def _recent_log(self, chat_id: str) -> str:
+        """最近群消息日志（不含最后一条 = 当前触发消息），没有返回空串。"""
+        lines = [f'{who}: {text}' for who, text in self.recent.get(chat_id, ())][:-1]
+        if not lines:
+            return ''
+        return ('【本群最近聊天记录（供参考，不一定与问题相关）】\n'
+                + '\n'.join(lines))
+
+    # -- 记忆管理 -------------------------------------------------------
+
+    @staticmethod
+    def _context_tokens(st: dict) -> int:
+        t = est_tokens(st['summary'])
+        for q, a in st['turns']:
+            t += est_tokens(q) + est_tokens(a)
+        return t
+
+    def _summarize(self, old_summary: str, batch: list) -> str:
+        """让 LLM 把旧摘要 + 一批最老对话压成一份新摘要。"""
+        lines = '\n'.join(f'群友：{q}\n大肥鱼：{a}' for q, a in batch)
+        prompt = (
+            '你在维护一个微信群 AI 的长期记忆。请把【旧摘要】和【新对话】'
+            '合并压缩成一份要点摘要，500 字以内，保留：聊过的话题、关键'
+            '事实/结论/承诺、人名与称呼、群里的梗、没聊完的事。直接输出'
+            '摘要正文，不要评论。\n\n'
+            f'【旧摘要】\n{old_summary or "（无）"}\n\n【新对话】\n{lines}')
+        return self.llm.chat([{'role': 'user', 'content': prompt}],
+                             temperature=0.3, max_tokens=SUMMARY_MAX_TOKENS)
+
+    def _maybe_compress(self, chat_id: str, st: dict) -> None:
+        """上下文估算 token 超限就滚动压缩最老的历史。"""
+        while (len(st['turns']) > COMPRESS_KEEP_TURNS
+               and self._context_tokens(st) > CONTEXT_TOKEN_LIMIT):
+            batch = []
+            # 一次压一批，单次摘要输入封顶 80K 估算 token，防止撑爆摘要请求
+            while (len(st['turns']) > COMPRESS_KEEP_TURNS
+                   and est_tokens('\n'.join(q + a for q, a in batch)) < 80_000):
+                batch.append(st['turns'].popleft())
+            before = self._context_tokens(st)
+            st['summary'] = self._summarize(st['summary'], batch)
+            print(f'[记忆] {chat_id[:20]}… 上下文≈{before} tokens，'
+                  f'压缩 {len(batch)} 轮 → 摘要 {est_tokens(st["summary"])} tokens',
+                  flush=True)
+
+    # -- LLM 组装 -----------------------------------------------------
+
+    def _build_messages(self, st: dict, question: str, recent: str = '') -> list:
+        msgs = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+        if st['summary']:
+            msgs.append({'role': 'system',
+                         'content': f'【更早对话的摘要】\n{st["summary"]}'})
+        for q, a in st['turns']:
+            msgs += [{'role': 'user', 'content': q},
+                     {'role': 'assistant', 'content': a}]
+        if recent:
+            msgs.append({'role': 'system', 'content': recent})
+        msgs.append({'role': 'user', 'content': question})
+        return msgs
+
+    def think(self, chat_id: str, question: str, recent: str = '',
+              who: str = '') -> tuple:
+        """带群上下文跑一轮 agent 循环，返回 (回答, 要@的昵称或 None)。
+
+        提问带上「【昵称】」前缀进上下文和长期记忆，模型因此知道在跟谁
+        说话；模型在回答开头写「@昵称」就转成真正的 @ 发出，没有就不 @。
+        """
+        st = self.memory.setdefault(
+            chat_id, {'summary': '', 'turns': deque()})
+        self._maybe_compress(chat_id, st)
+        q = f'【{who}】{question}' if who else question
+        msgs = self._build_messages(st, q, recent)
+        answer = self._agent_loop(msgs, chat_id)
+        at = None
+        m = re.match(r'^@(\S{1,32})\s*', answer)
+        if m and m.group(1) not in (AT_NAME,):
+            at = m.group(1)
+            answer = answer[m.end():].lstrip()
+        st['turns'].append((q, answer))
+        return answer, at
+
+    # -- agent 工具循环 ---------------------------------------------------
+
+    def _agent_loop(self, msgs: list, chat_id: str = None) -> str:
+        """跑工具调用循环，返回最终文本回答。
+
+        工具轮次只是临时消息（不进长期记忆，不影响前缀稳定）；接口不支持
+        工具或全部节点失败时降级为无工具直答，保证一定能回话。
+        """
+        for _ in range(TOOL_ROUNDS):
+            try:
+                m = self.llm.chat_raw(msgs, tools=[SEARCH_TOOL])
+            except Exception as e:
+                print(f'[agent] 工具请求失败（{e}），降级为无工具直答',
+                      flush=True)
+                return self.llm.chat(msgs)
+            tcs = m.get('tool_calls') or []
+            if not tcs:
+                return (m.get('content') or '').strip() or FAIL_REPLY
+            msgs.append({'role': 'assistant',
+                         'content': m.get('content') or '',
+                         'tool_calls': tcs})
+            for tc in tcs:
+                fn = tc.get('function') or {}
+                try:
+                    args = json.loads(fn.get('arguments') or '{}')
+                    if not isinstance(args, dict):
+                        args = {}
+                except Exception:
+                    args = {}
+                result = self._exec_tool(fn.get('name') or '', args, chat_id)
+                msgs.append({'role': 'tool',
+                             'tool_call_id': tc.get('id') or '',
+                             'content': result})
+        print('[agent] 工具轮数用尽，强制直接回答', flush=True)
+        return self.llm.chat(msgs)
+
+    def _exec_tool(self, name: str, args: dict, chat_id: str = None) -> str:
+        t0 = time.time()
+        try:
+            if name == 'search_group_messages':
+                out = self.search_group_messages(
+                    args.get('keyword') or '', args.get('member') or '',
+                    # 安全边界：搜索永远限定在「提问的这个群」，杜绝把别的
+                    # 群的消息混进本群回复（2026-10-29 实测混群事故）
+                    scope_username=chat_id)
+            else:
+                out = f'未知工具：{name}'
+        except Exception as e:
+            out = f'工具错误：{type(e).__name__}: {e}'
+        print(f'[工具] {name} {args} -> {len(out)} 字 '
+              f'({time.time() - t0:.1f}s)', flush=True)
+        return out
+
+    # -- 群消息搜索工具 ---------------------------------------------------
+
+    def _ensure_db(self):
+        if self._db is None:
+            from wechatauto.db import WeChatDB
+            self._db = WeChatDB()
+        return self._db
+
+    def search_group_messages(self, keyword: str = '', member: str = '',
+                              group: str = '',
+                              scope_username: str = None) -> str:
+        """搜索最近 SEARCH_DAYS 天的群聊消息，返回可读文本。
+
+        keyword 匹配消息文本（只搜文本消息），member 匹配发送者昵称/备注/
+        wxid。默认扫会话列表里所有群（命令行 --search 用）；bot 回话时传
+        ``scope_username``=提问的会话，**只搜这一个群**，杜绝跨群内容漏进
+        回复。命中超过 SEARCH_MAX_RESULTS 时保留最新的，返回文本超长时再
+        按 SEARCH_RESULT_MAX_CHARS 掐头（都带说明，模型知道被截了）。
+        """
+        db = self._ensure_db()
+        cutoff = time.time() - SEARCH_DAYS * 86400
+        kw = (keyword or '').strip().lower()
+        mb = (member or '').strip().lower()
+        gp = (group or '').strip()
+
+        if scope_username:
+            disp = db.get_nickname(scope_username) or scope_username
+            rooms = [(scope_username, disp)]
+        else:
+            rooms = []
+            for s in db.get_sessions(limit=SEARCH_ROOM_LIMIT):
+                # get_sessions 返回 dict（username/summary/last_time...）
+                un = (s.get('username') or '') if isinstance(s, dict) \
+                    else (getattr(s, 'username', '') or '')
+                if not un.endswith('@chatroom'):
+                    continue
+                disp = db.get_nickname(un) or un
+                if gp and gp not in disp and gp not in un:
+                    continue
+                rooms.append((un, disp))
+
+        hits = []          # (群显示名, 原始行)
+        for un, disp in rooms:
+            offset = 0
+            while offset < SEARCH_ROOM_PAGE_CAP:
+                rows = db.get_messages(un, limit=SEARCH_PAGE, offset=offset)
+                if not rows:
+                    break
+                older = False
+                for r in rows:
+                    ts = r.get('create_time') or 0
+                    if not ts or ts < cutoff:
+                        older = True
+                        break
+                    hits.append((disp, r))
+                if older:
+                    break
+                offset += SEARCH_PAGE
+
+        nick = db.nickname_map()
+        out = []           # (时间, 群名, 发送者, 文本)
+        for disp, r in hits:
+            t = str(r.get('type') or '').lower()
+            if t in ('text', '文本'):
+                text = _strip_group_prefix(str(r.get('content') or '')).strip()
+            else:
+                text = f'[{r.get("type")}]'
+                if kw:
+                    continue          # 关键词只搜文本消息
+            sun = r.get('sender_username') or ''
+            sender = nick.get(sun) or sun or '未知'
+            if mb and mb not in sender.lower() and mb not in sun.lower():
+                continue
+            if kw and kw not in text.lower():
+                continue
+            out.append((r.get('create_time') or 0, disp, sender, text))
+
+        out.sort(key=lambda x: x[0])
+        total = len(out)
+        note = ''
+        if total > SEARCH_MAX_RESULTS:
+            out = out[-SEARCH_MAX_RESULTS:]
+            note = f'（命中 {total} 条，仅保留最新 {SEARCH_MAX_RESULTS} 条）'
+        lines = []
+        for ts, disp, sender, text in out:
+            tm = time.strftime('%m-%d %H:%M', time.localtime(ts))
+            lines.append(f'[{tm}] {disp} | {sender}: {text[:100]}')
+        body = '\n'.join(lines)
+        if len(body) > SEARCH_RESULT_MAX_CHARS:
+            keep, size = [], 0
+            for ln in reversed(lines):
+                if size + len(ln) + 1 > SEARCH_RESULT_MAX_CHARS:
+                    break
+                keep.append(ln)
+                size += len(ln) + 1
+            body = '\n'.join(reversed(keep))
+            note += f'（结果过长，丢弃最旧 {len(lines) - len(keep)} 条）'
+        head = (f'近{SEARCH_DAYS}天群消息搜索：keyword={kw or "-"} '
+                f'member={mb or "-"} group={gp or "-"}；'
+                f'扫了 {len(rooms)} 个群，命中 {total} 条{note}')
+        return head + ('\n' + body if body else '\n（无命中）')
+
+    # -- 微信回调 -------------------------------------------------------
+
+    def on_message(self, msg, chat) -> None:
+        try:
+            if self.paused:
+                return                      # 已因发送失败暂停：只听不回，等人工重启
+            self._record(msg, chat)         # 什么消息都先进围观记录
+            if getattr(msg, 'attr', '') == 'self':
+                return                      # 自己（包括机器人本人）发的不管
+            if msg.type not in ('text', '文本'):
+                return                      # 只处理文本消息
+            text = _strip_group_prefix(msg.content or '').strip()
+            chat_id = getattr(chat, 'who', '')
+            at_hit = f'@{AT_NAME}' in text
+            followup = False
+            if not at_hit:
+                if '@' in text:
+                    return                  # 在 @ 别人，不抢话
+                if time.time() >= self.followup_until.get(chat_id, 0):
+                    return                  # 没被 @ 也不在跟进窗口内
+                followup = True
+            # 去掉 @前缀（微信 @ 后面常跟 U+2005 特殊空格）
+            question = text.split(f'@{AT_NAME}', 1)[1] if at_hit else text
+            question = question.lstrip('\u2005\u2004\u2003 ').strip()
+            if not question:
+                question = '在吗？'
+            recent = self._recent_log(chat_id)
+
+            where = getattr(chat, 'nickname', '') or chat_id
+            who = getattr(msg, 'sender', '') or '有人'
+            tag = '收到·跟进' if followup else '收到'
+            print(f'[{tag}] {where} | {who}: {text!r}', flush=True)
+
+            t0 = time.time()
+            try:
+                answer, at = self.think(chat_id, question, recent, who=who)
+            except Exception as e:
+                print(f'[llm] 全部节点失败：{e}', flush=True)
+                answer, at = FAIL_REPLY, None
+            else:
+                # 回答成功才续窗口：聊得越久免 @ 越久，冷场 5 分钟重新要 @
+                self.followup_until[chat_id] = time.time() + FOLLOWUP_WINDOW
+            print(f'[回复] ({time.time() - t0:.1f}s) {answer!r}'
+                  f'{" [@%s]" % at if at else ""}', flush=True)
+
+            with self.send_lock:
+                if at:
+                    # 模型在回答开头写了 @：转成真正的@发送；@ 失败（比如
+                    # 成员弹层没匹配上）降级为普通发送，这种失败不触发暂停
+                    r = chat.SendMsg(answer, at=at)
+                    if r is not None and hasattr(r, 'is_success') \
+                            and not r.is_success:
+                        print(f'[发送] @发送失败（{r}），降级为普通发送',
+                              flush=True)
+                        r = chat.SendMsg(answer)
+                else:
+                    r = chat.SendMsg(answer)
+                if r is not None and hasattr(r, 'is_success') \
+                        and not r.is_success:
+                    # 发送失败（最常见：剪贴板粘贴 6 次未确认）——立即暂停，
+                    # 宁可不回话也不再对界面做任何键鼠操作
+                    self.paused = True
+                    print(f'[!!!] 发送失败：{r}\n'
+                          f'[!!!] 机器人已暂停应答（防止继续动键鼠），'
+                          f'请检查微信窗口状态后重启程序', flush=True)
+        except Exception:
+            import traceback
+            print('[回调异常]\n' + traceback.format_exc(), flush=True)
+
+    # -- 启停 -----------------------------------------------------------
+
+    def run(self) -> None:
+        wx = WeChat()
+        r = wx.AddListenAll(self.on_message)
+        if r is not None and hasattr(r, 'is_success') and not r.is_success:
+            print(f'开启全局监听失败：{r}', flush=True)
+            return
+        wx.StartListening()
+        print(f'大肥鱼已上线：监听所有会话，@{AT_NAME} 触发回答，Ctrl+C 退出', flush=True)
+        wx.KeepRunning()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description='大肥鱼微信群 AI 机器人')
+    ap.add_argument('--test', metavar='问题', help='只测 LLM 链路，不连微信')
+    ap.add_argument('--search', nargs='?', const='', metavar='关键词',
+                    help='搜索近3天群消息后退出（不带值=全部）；'
+                         '配合 --member/--group')
+    ap.add_argument('--member', default='', help='按发送者过滤（配合 --search）')
+    ap.add_argument('--group', default='', help='按群名过滤（配合 --search）')
+    args = ap.parse_args()
+
+    _setup_logging()
+    bot = DaFeiYuBot()
+    if args.search is not None:
+        print(bot.search_group_messages(args.search, args.member, args.group))
+        return
+    if args.test is not None:
+        q = args.test.lstrip('\u2005 ').strip() or '在吗？'
+        print(f'问：{q}')
+        print(f'答：{bot.think("--test--", q, who="测试用户")[0]}')
+        return
+    bot.run()
+
+
+if __name__ == '__main__':
+    main()

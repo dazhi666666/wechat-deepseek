@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# 运行产物（含个人聊天数据，绝不入库）
+*.log
+dafeiyu_bot.log*
+wechatauto_logs/
+*_消息提取*.txt
+*_信息提炼*.md
+导出*.txt
+*.decrypted.db
+.keys.json
+
+# 编辑器
+.idea/
+.vscode/
