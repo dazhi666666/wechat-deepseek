@@ -16,6 +16,10 @@ wechatauto_logs/
 *.decrypted.db
 .keys.json
 
+# 表情包是用户自己的媒体文件，不入库
+stickers/*
+!stickers/README.md
+
 # 编辑器
 .idea/
 .vscode/

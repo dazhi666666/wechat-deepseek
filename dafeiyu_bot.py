@@ -74,6 +74,12 @@ LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 LOG_MAX_BYTES = 5_000_000   # 单文件 5MB，超出滚动成 .1/.2
 LOG_KEEP = 2                # 保留几个历史日志文件
 
+# -- 表情包/图片 ----------------------------------------------------------
+# 往这个文件夹丢 GIF（微信会作为「动画表情」发出）或 jpg/png（图片消息），
+# 文件名起清楚点，模型按名字挑。GIF 粘贴进微信即动画表情。
+MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'stickers')
+
 CONTEXT_TOKEN_LIMIT = 100_000   # 群聊上下文估算 token 数到这个值就压缩历史
 COMPRESS_KEEP_TURNS = 4         # 压缩时保留最近几轮原对话不压
 SUMMARY_MAX_TOKENS = 1500       # 压缩摘要的长度上限
@@ -108,7 +114,8 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - 你可以调用 search_group_messages 工具：搜索【当前这个群】最近 3 天的消息。参数 keyword（按消息内容）、member（按发送者昵称/备注/wxid）都可选，都不填=返回本群全部（最多 2000 条）。只能搜本群，别的群搜不到。
 - 被问「群里之前聊了什么 / 谁提过 X / 某人发过什么」这类问题时，先调工具搜证据再回答，别凭印象编；引用时带上时间。没搜到就直说没搜到。
 - 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
-- 回复要点名某个人时，把回答写成「@昵称 你的回答」开头（昵称用【】里的名字，不要自己编），系统会把它转成真正的@提醒对方。默认规则：别人正经问你问题、求帮忙、点名说话，回答一律以「@昵称 」开头；只有接着同一话题连续斗嘴、明显不需要指名时才省略。"""
+- 回复要点名某个人时，把回答写成「@昵称 你的回答」开头（昵称用【】里的名字，不要自己编），系统会把它转成真正的@提醒对方。默认规则：别人正经问你问题、求帮忙、点名说话，回答一律以「@昵称 」开头；只有接着同一话题连续斗嘴、明显不需要指名时才省略。
+- 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述）。闲聊、被逗、表达情绪、气氛到位时发一个很加分；正经技术回答、办事总结不要乱发。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。"""
 
 FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
 
@@ -387,8 +394,83 @@ class DaFeiYuBot:
         msgs.append({'role': 'user', 'content': question})
         return msgs
 
+    # -- 表情包/图片发送 ---------------------------------------------------
+
+    @staticmethod
+    def _list_stickers() -> list:
+        """列出 MEDIA_DIR 下的表情/图片文件（GIF/JPG/PNG/WEBP/BMP）。"""
+        try:
+            return sorted(f for f in os.listdir(MEDIA_DIR)
+                          if f.lower().endswith(
+                              ('.gif', '.jpg', '.jpeg', '.png',
+                               '.webp', '.bmp')))
+        except OSError:
+            return []
+
+    def _sticker_tool(self) -> dict:
+        """动态构建 send_sticker 工具定义，可用名单写进描述里。"""
+        names = '、'.join(os.path.splitext(f)[0]
+                          for f in self._list_stickers()) or '（暂无）'
+        return {
+            'type': 'function',
+            'function': {
+                'name': 'send_sticker',
+                'description': (
+                    '发送一个表情包/图片到群里。当前可用：' + names +
+                    '。name 填上面的名字（可不含扩展名，支持模糊匹配）。'
+                    '闲聊逗趣时用，正经技术回答不要乱发。'),
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'name': {'type': 'string',
+                                 'description': '表情/图片名字'},
+                    },
+                    'required': ['name'],
+                },
+            },
+        }
+
+    @staticmethod
+    def _match_sticker(name: str):
+        """按名字模糊匹配表情文件，返回完整路径或 None。"""
+        files = DaFeiYuBot._list_stickers()
+        if not files:
+            return None
+        key = os.path.splitext((name or '').strip().lower())[0]
+        for f in files:                    # 精确：文件名含/不含扩展名都认
+            if f.lower() == (name or '').strip().lower() \
+                    or os.path.splitext(f)[0].lower() == key:
+                return os.path.join(MEDIA_DIR, f)
+        for f in files:                    # 模糊：子串命中就用
+            if key and key in f.lower():
+                return os.path.join(MEDIA_DIR, f)
+        return None
+
+    def _send_sticker(self, name: str, chat) -> str:
+        """匹配并发送表情/图片，返回给模型的工具结果文本。
+
+        发送失败只把错误回给模型（让它改用文字），不触发暂停——媒体粘贴
+        失败和文本粘贴失败是同一类可重试问题，且文字链路有自己的保护。
+        """
+        if chat is None:
+            return '当前模式无法发送媒体，请改用文字回答'
+        path = self._match_sticker(name)
+        if not path:
+            avail = '、'.join(os.path.splitext(f)[0]
+                              for f in self._list_stickers()) or '（空）'
+            return f'没有找到「{name}」，可用：{avail}'
+        t0 = time.time()
+        with self.send_lock:
+            r = chat.SendFiles(path)
+        ok = r is None or (hasattr(r, 'is_success') and r.is_success)
+        print(f'[表情] {os.path.basename(path)} -> '
+              f'{"成功" if ok else r} ({time.time() - t0:.1f}s)', flush=True)
+        if ok:
+            return f'已发送 {os.path.basename(path)}'
+        return f'发送失败（{r}），请改用文字回答'
+
     def think(self, chat_id: str, question: str, recent: str = '',
-              who: str = '') -> tuple:
+              who: str = '', chat=None) -> tuple:
         """带群上下文跑一轮 agent 循环，返回 (回答, 要@的昵称或 None)。
 
         提问带上「【昵称】」前缀进上下文和长期记忆，模型因此知道在跟谁
@@ -399,7 +481,7 @@ class DaFeiYuBot:
         self._maybe_compress(chat_id, st)
         q = f'【{who}】{question}' if who else question
         msgs = self._build_messages(st, q, recent)
-        answer = self._agent_loop(msgs, chat_id)
+        answer = self._agent_loop(msgs, chat_id, chat)
         at = None
         m = re.match(r'^@(\S{1,32})\s*', answer)
         if m and m.group(1) not in (AT_NAME,):
@@ -410,22 +492,30 @@ class DaFeiYuBot:
 
     # -- agent 工具循环 ---------------------------------------------------
 
-    def _agent_loop(self, msgs: list, chat_id: str = None) -> str:
-        """跑工具调用循环，返回最终文本回答。
+    def _agent_loop(self, msgs: list, chat_id: str = None,
+                    chat=None) -> str:
+        """跑工具调用循环，返回最终文本回答（可能为空串=只发了媒体）。
 
         工具轮次只是临时消息（不进长期记忆，不影响前缀稳定）；接口不支持
         工具或全部节点失败时降级为无工具直答，保证一定能回话。
+        send_sticker 发的是真文件（表情/图片），发成功后模型可以只给空文字。
         """
+        media_sent = False
         for _ in range(TOOL_ROUNDS):
             try:
-                m = self.llm.chat_raw(msgs, tools=[SEARCH_TOOL])
+                m = self.llm.chat_raw(msgs,
+                                      tools=[SEARCH_TOOL, self._sticker_tool()])
             except Exception as e:
                 print(f'[agent] 工具请求失败（{e}），降级为无工具直答',
                       flush=True)
-                return self.llm.chat(msgs)
+                text = self.llm.chat(msgs)
+                return text if (text or media_sent) else FAIL_REPLY
             tcs = m.get('tool_calls') or []
             if not tcs:
-                return (m.get('content') or '').strip() or FAIL_REPLY
+                text = (m.get('content') or '').strip()
+                if not text:
+                    return '' if media_sent else FAIL_REPLY
+                return text
             msgs.append({'role': 'assistant',
                          'content': m.get('content') or '',
                          'tool_calls': tcs})
@@ -437,12 +527,19 @@ class DaFeiYuBot:
                         args = {}
                 except Exception:
                     args = {}
-                result = self._exec_tool(fn.get('name') or '', args, chat_id)
+                name = fn.get('name') or ''
+                if name == 'send_sticker':
+                    result = self._send_sticker(args.get('name') or '', chat)
+                    if result.startswith('已发送'):
+                        media_sent = True
+                else:
+                    result = self._exec_tool(name, args, chat_id)
                 msgs.append({'role': 'tool',
                              'tool_call_id': tc.get('id') or '',
                              'content': result})
         print('[agent] 工具轮数用尽，强制直接回答', flush=True)
-        return self.llm.chat(msgs)
+        text = self.llm.chat(msgs)
+        return text if (text or media_sent) else FAIL_REPLY
 
     def _exec_tool(self, name: str, args: dict, chat_id: str = None) -> str:
         t0 = time.time()
@@ -598,7 +695,8 @@ class DaFeiYuBot:
 
             t0 = time.time()
             try:
-                answer, at = self.think(chat_id, question, recent, who=who)
+                answer, at = self.think(chat_id, question, recent, who=who,
+                                        chat=chat)
             except Exception as e:
                 print(f'[llm] 全部节点失败：{e}', flush=True)
                 answer, at = FAIL_REPLY, None
@@ -608,10 +706,13 @@ class DaFeiYuBot:
             print(f'[回复] ({time.time() - t0:.1f}s) {answer!r}'
                   f'{" [@%s]" % at if at else ""}', flush=True)
 
+            if not answer:
+                print('[回复] 媒体已发出，本轮无文字', flush=True)
+                return
             with self.send_lock:
                 if at:
-                    # 模型在回答开头写了 @：转成真正的@发送；@ 失败（比如
-                    # 成员弹层没匹配上）降级为普通发送，这种失败不触发暂停
+                    # AI 决定要 @：@ 发送失败（比如成员弹层没匹配上）降级为
+                    # 普通发送，这种失败不该触发暂停
                     r = chat.SendMsg(answer, at=at)
                     if r is not None and hasattr(r, 'is_success') \
                             and not r.is_success:
@@ -663,7 +764,8 @@ def main() -> None:
     if args.test is not None:
         q = args.test.lstrip('\u2005 ').strip() or '在吗？'
         print(f'问：{q}')
-        print(f'答：{bot.think("--test--", q, who="测试用户")[0]}')
+        answer, at = bot.think('--test--', q, who='测试用户')
+        print(f'答：{answer}' + (f'\n（将 @ {at}）' if at else ''))
         return
     bot.run()
 
