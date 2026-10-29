@@ -27,6 +27,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -86,6 +88,13 @@ SUMMARY_MAX_TOKENS = 1500       # 压缩摘要的长度上限
 LLM_TIMEOUT = 90            # 单节点请求超时（秒）
 MAX_TOKENS = 600
 
+# -- ChatGPT 桥（经 opencli，走你登录态的 Chrome）--------------------------
+# 只开放 chatgpt ask 这一个口子：固定纯文本、固定新问题，不暴露切模型/
+# 指定会话/传文件/深度研究等参数；冷却 + 每天上限双限流防风控。
+CHATGPT_COOLDOWN = 60       # 两次调用最小间隔（秒）
+CHATGPT_DAILY_CAP = 20      # 每天最多调用次数
+CHATGPT_TIMEOUT = 90        # ask 等回答的超时（秒）
+
 SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸鱼娘（前身「防火女」，现在活泼爱偷吃，偶尔穿女仆装），在微信群里当助手。
 
 ## 说话方式（最重要）
@@ -115,9 +124,31 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - 被问「群里之前聊了什么 / 谁提过 X / 某人发过什么」这类问题时，先调工具搜证据再回答，别凭印象编；引用时带上时间。没搜到就直说没搜到。
 - 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
 - 回复要点名某个人时，把回答写成「@昵称 你的回答」开头（昵称用【】里的名字，不要自己编），系统会把它转成真正的@提醒对方。默认规则：别人正经问你问题、求帮忙、点名说话，回答一律以「@昵称 」开头；只有接着同一话题连续斗嘴、明显不需要指名时才省略。
-- 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述）。闲聊、被逗、表达情绪、气氛到位时发一个很加分；正经技术回答、办事总结不要乱发。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。"""
+- 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述）。闲聊、被逗、表达情绪、气氛到位时发一个很加分；正经技术回答、办事总结不要乱发。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。
+- ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答：只在用户明确点名「问问 ChatGPT」、想对比第二意见时才用，每天有次数上限，自己能答的别浪费。拿到回答后用自己的口吻转述（说明这是 ChatGPT 说的），别原文照搬一长段。"""
 
 FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
+
+# ChatGPT 工具：只暴露 ask（转问题拿回答），范围收敛在提示词+限流双层
+CHATGPT_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'ask_chatgpt',
+        'description': (
+            '把问题转交给 ChatGPT 并拿回它的回答（经你的 ChatGPT 网页'
+            '会话，最多等 90 秒）。只在用户明确点名要用 ChatGPT、想对比'
+            '第二意见、或自己没把握时使用；每天有次数上限，自己能答的'
+            '别浪费额度。prompt 要写成完整、自包含的问题。'),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'prompt': {'type': 'string',
+                           'description': '转给 ChatGPT 的完整问题'},
+            },
+            'required': ['prompt'],
+        },
+    },
+}
 
 # 暴露给 LLM 的工具：群消息搜索（实现在 DaFeiYuBot.search_group_messages）
 # 只开放「当前会话」范围：跨群搜索会让 A 群的回复混进 B 群的内容（实测事故），
@@ -322,6 +353,10 @@ class DaFeiYuBot:
         self.followup_until = {}
         self.paused = False               # 发送失败后置 True，暂停应答防继续乱动界面
         self._db = None                    # 搜索工具用的 WeChatDB，按需打开
+        self._opencli = None               # (node, main.js) 缓存，None=还没找过
+        self._cgpt_last = 0.0              # 上次 ChatGPT 调用时间
+        self._cgpt_count = 0               # 当天已调用次数
+        self._cgpt_day = ''                # 当天日期（跨天重置计数）
         self.send_lock = threading.Lock()   # 回话驱动 GUI，必须串行
 
     # -- 围观记录 -------------------------------------------------------
@@ -469,6 +504,80 @@ class DaFeiYuBot:
             return f'已发送 {os.path.basename(path)}'
         return f'发送失败（{r}），请改用文字回答'
 
+    # -- ChatGPT 桥 -------------------------------------------------------
+
+    def _resolve_opencli(self):
+        """定位 npm 全局的 opencli 入口，返回 (node, main.js) 或 (None, None)。
+
+        用 node 直跑 main.js 而不是 opencli.cmd：绕开 cmd.exe 的中文参数
+        编码坑，node 从命令行拿到的就是 UTF-16 原文。纯文件定位（opencli
+        的 shim 在 <全局目录>/opencli.cmd，包体在旁边的 node_modules/ 下），
+        不起子进程——Windows 上 subprocess 直接调 npm.cmd 会 FileNotFoundError。
+        """
+        if self._opencli is None:
+            node = shutil.which('node')
+            main_js = None
+            shim = shutil.which('opencli') or ''
+            if node and shim:
+                cand = os.path.join(os.path.dirname(shim), 'node_modules',
+                                    '@jackwener', 'opencli',
+                                    'dist', 'src', 'main.js')
+                if os.path.isfile(cand):
+                    main_js = cand
+            self._opencli = (node, main_js)
+        return self._opencli
+
+    def _ask_chatgpt(self, prompt: str) -> str:
+        """转问题给 ChatGPT，返回给模型的工具结果文本。
+
+        限流：冷却 + 每天上限。失败（没装桥/扩展没连/没登录/超时）只把
+        原因回给模型，不影响其它回答链路。
+        """
+        prompt = (prompt or '').strip()
+        if not prompt:
+            return '错误：prompt 不能为空'
+        now = time.time()
+        day = time.strftime('%Y-%m-%d')
+        if self._cgpt_day != day:
+            self._cgpt_day, self._cgpt_count = day, 0
+        if now - self._cgpt_last < CHATGPT_COOLDOWN:
+            wait = int(CHATGPT_COOLDOWN - (now - self._cgpt_last)) + 1
+            return f'调用太频繁，请 {wait} 秒后再试'
+        if self._cgpt_count >= CHATGPT_DAILY_CAP:
+            return '今天调用 ChatGPT 的次数已达上限，明天再用'
+        node, main_js = self._resolve_opencli()
+        if not node or not main_js:
+            return 'ChatGPT 桥不可用：本机没找到 opencli 运行时'
+        print(f'[ChatGPT] 转问（今天第 {self._cgpt_count + 1} 次）…', flush=True)
+        t0 = time.time()
+        try:
+            proc = subprocess.run(
+                [node, main_js, 'chatgpt', 'ask', prompt,
+                 '--format', 'json', '--timeout', str(CHATGPT_TIMEOUT)],
+                capture_output=True, text=True, encoding='utf-8',
+                errors='replace', timeout=CHATGPT_TIMEOUT + 30)
+        except subprocess.TimeoutExpired:
+            return 'ChatGPT 超时没有给出回答'
+        except FileNotFoundError:
+            return 'ChatGPT 桥不可用：node 未找到'
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or '').strip()[:300]
+            return (f'ChatGPT 调用失败：{err or "未知错误"}'
+                    f'（检查 Chrome 的 OpenCLI 扩展和 chatgpt.com 登录态）')
+        try:
+            rows = json.loads(proc.stdout)
+            response = (rows[0]['response'] if isinstance(rows, list)
+                        else rows['response'])
+        except Exception:
+            return ('ChatGPT 返回了无法解析的内容：'
+                    + (proc.stdout or '')[:200])
+        if not (response or '').strip():
+            return 'ChatGPT 没有返回内容'
+        self._cgpt_last, self._cgpt_count = now, self._cgpt_count + 1
+        print(f'[ChatGPT] 完成 ({time.time() - t0:.0f}s)，'
+              f'{len(response)} 字', flush=True)
+        return f'ChatGPT 的回答：\n{response[:4000]}'
+
     def think(self, chat_id: str, question: str, recent: str = '',
               who: str = '', chat=None) -> tuple:
         """带群上下文跑一轮 agent 循环，返回 (回答, 要@的昵称或 None)。
@@ -503,8 +612,9 @@ class DaFeiYuBot:
         media_sent = False
         for _ in range(TOOL_ROUNDS):
             try:
-                m = self.llm.chat_raw(msgs,
-                                      tools=[SEARCH_TOOL, self._sticker_tool()])
+                m = self.llm.chat_raw(
+                    msgs, tools=[SEARCH_TOOL, CHATGPT_TOOL,
+                                 self._sticker_tool()])
             except Exception as e:
                 print(f'[agent] 工具请求失败（{e}），降级为无工具直答',
                       flush=True)
@@ -532,6 +642,8 @@ class DaFeiYuBot:
                     result = self._send_sticker(args.get('name') or '', chat)
                     if result.startswith('已发送'):
                         media_sent = True
+                elif name == 'ask_chatgpt':
+                    result = self._ask_chatgpt(args.get('prompt') or '')
                 else:
                     result = self._exec_tool(name, args, chat_id)
                 msgs.append({'role': 'tool',
