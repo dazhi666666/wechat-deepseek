@@ -517,8 +517,11 @@ class DaFeiYuBot:
                               for f in self._list_stickers()) or '（空）'
             return f'没有找到「{name}」，可用：{avail}'
         t0 = time.time()
-        with self.send_lock:
-            r = chat.SendFiles(path)
+        try:
+            with self.send_lock:
+                r = chat.SendFiles(path)
+        except Exception as e:
+            return f'发送出错（{type(e).__name__}: {e}），请改用文字回答'
         ok = r is None or (hasattr(r, 'is_success') and r.is_success)
         print(f'[表情] {os.path.basename(path)} -> '
               f'{"成功" if ok else r} ({time.time() - t0:.1f}s)', flush=True)
@@ -653,15 +656,20 @@ class DaFeiYuBot:
         if not files:
             return ('生图完成但没下载到图片文件：'
                     + (proc.stdout or '')[:200])
-        with self.send_lock:
-            sent = []
-            for f in files:
-                r = chat.SendFiles(f)
-                ok = r is None or (hasattr(r, 'is_success') and r.is_success)
-                print(f'[ChatGPT] 图片 {os.path.basename(f)} -> '
-                      f'{"成功" if ok else r}', flush=True)
-                if ok:
-                    sent.append(f)
+        try:
+            with self.send_lock:
+                sent = []
+                for f in files:
+                    r = chat.SendFiles(f)
+                    ok = r is None or (hasattr(r, 'is_success')
+                                       and r.is_success)
+                    print(f'[ChatGPT] 图片 {os.path.basename(f)} -> '
+                          f'{"成功" if ok else r}', flush=True)
+                    if ok:
+                        sent.append(f)
+        except Exception as e:
+            return (f'图片下载到了但转发出错（{type(e).__name__}: {e}），'
+                    f'本地路径：{files[0] if files else "无"}')
         if not sent:
             return '图片下载到了，但发到微信群失败了，请改用文字描述'
         return (f'已把 ChatGPT 生成的 {len(sent)}/{len(files)} 张图片'

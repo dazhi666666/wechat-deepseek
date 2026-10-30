@@ -194,6 +194,14 @@ class _AllMessageChat:
             raise WechatautoError('全局监听回调里无法回复：未能构造 Chat')
         return chat.SendMsg(msg, **kw)
 
+    def SendFiles(self, filepath, **kw):
+        """发文件/图片：转发给升级后的真 Chat（回调里回图/发文件用）。"""
+        chat = self.chat
+        if chat is None:
+            from wechatauto.exceptions import WechatautoError
+            raise WechatautoError('全局监听回调里无法发送文件：未能构造 Chat')
+        return chat.SendFiles(filepath, **kw)
+
 
 def _extract_group_sender(content) -> str:
     """群消息内容形如 ``wxid_xxx:\\n正文``，提取发送者 wxid。"""
