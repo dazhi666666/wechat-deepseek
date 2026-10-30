@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wechat-deepseek"
-version = "1.2.8.1"
+version = "1.2.8.2"
 description = "微信大肥鱼 DeepSeek：微信群聊 AI 机器人（@触发、长期记忆、群消息搜索）+ 微信 4.x Windows 客户端自动化库（SQLCipher 解密读取 + UIA/坐标-OCR 混合发送）"
 readme = "README.md"
 requires-python = ">=3.9"

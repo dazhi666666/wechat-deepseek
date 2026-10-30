@@ -2694,13 +2694,33 @@ class WeChatGUI:
             return WxResponse.failure('输入框不可用')
         self._input.type_unicode('@')
         time.sleep(0.9)
+        # 成员名常带花体/上标等装饰 Unicode（OCR 读不出来），大群弹层一屏
+        # 也放不下；取名字里最长一段可直接键入的文字（中文/字母/数字）追加
+        # 打进 @ 过滤框，让弹层自己收窄到目标附近再 OCR。点击成员后微信会把
+        # 已打的过滤文字替换成完整的 @昵称，不会残留在正文里。
+        runs, cur = [], ''
+        for ch in member:
+            if ('\u4e00' <= ch <= '\u9fff') or (ch.isascii() and ch.isalnum()):
+                cur += ch
+            elif cur:
+                runs.append(cur)
+                cur = ''
+        if cur:
+            runs.append(cur)
+        core = max(runs, key=len) if runs else ''
+        if core:
+            self._input.type_unicode(core)
+            time.sleep(0.8)
         box = self.get_input_box()
         popup = (self.right_pane_left, max(80, (box[1] if box else int(self.render_h * 0.49)) - 500),
                  self.render_w, (box[1] if box else int(self.render_h * 0.77)))
         items = self.ocr(popup)
+        full = member.replace(' ', '')
         target = None
         for t, x, yy, w, h in items:
-            if member in t or t.startswith(member):
+            tn = t.replace(' ', '')
+            if (full and full in tn) or (core and core in tn) \
+                    or (member and member in t):
                 target = rhythm.point((x, yy, x + w, yy + h))
                 break
         if not target:
