@@ -6,9 +6,8 @@
 只有「回话」那一刻才会驱动微信窗口。每个群有长期记忆：对话无上限累积，
 估算上下文到 CONTEXT_TOKEN_LIMIT（默认 100K token）时自动把最老的历史
 压成摘要（最近几轮永远保留原文）。被 @ 回答时还会附上该群最近
-RECENT_N 条群消息当上下文，没聊过天也能接得上话。@ 过一次后进入
-跟进对话：FOLLOWUP_WINDOW 秒内的群消息免 @ 直接回答，每答一轮续一次
-窗口，冷场超时后需要重新 @（期间有人在 @ 别人的消息不会抢答）。
+RECENT_N 条群消息当上下文，没聊过天也能接得上话。只认 @ 触发，
+没被 @ 的消息只进围观记录，不回答。
 
 内置 agent 工具循环：LLM 可调用 search_group_messages 搜索最近
 SEARCH_DAYS 天的群聊消息（关键词/成员/群名，为空=全部，上限 2000 条）。
@@ -54,10 +53,7 @@ API_PORT = int(os.environ.get('WECHAT_DEEPSEEK_API_PORT', '8000'))
 API_KEY = os.environ.get('WECHAT_DEEPSEEK_API_KEY', 'EMPTY')
 MODEL = os.environ.get('WECHAT_DEEPSEEK_MODEL', 'deepseek-v4')
 
-AT_NAME = '大肥鱼'          # 触发词：消息里包含 "@大肥鱼" 才回答
-FOLLOWUP_WINDOW = 300       # 跟进对话窗口（秒）：@ 过一次后，窗口内群里
-                            # 的消息免 @ 直接回答；每次回复都刷新倒计时，
-                            # 冷静 FOLLOWUP_WINDOW 秒后需要重新 @
+AT_NAME = '大肥鱼'          # 触发词：消息里包含 "@大肥鱼" 才回答（只认 @）
 RECENT_N = 20               # 被 @ 回答时附带的「最近群消息」条数
 RECENT_LINE_MAX = 200       # 群消息日志里单条消息截断长度，防长文刷爆上下文
 
@@ -99,6 +95,7 @@ CHATGPT_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸鱼娘（前身「防火女」，现在活泼爱偷吃，偶尔穿女仆装），在微信群里当助手。
 
 ## 说话方式（最重要）
+- **简短压倒一切**：这是群聊，没人想读长篇。默认一到两句话说完；只有被明确要求写代码/教程/总结时才可以长，长回答也只保留干货，删掉铺垫、重复和客套。发出前先自检：这句话删掉意思变吗？不变就删。
 - 默认说人话：像靠谱的同事一样，清楚、自然、直接地把问题答好，不演不装。
 - 只有纯闲聊、斗嘴、被开玩笑时才用一点人设腔（俏皮、傲娇、爱吃小鱼干），点到为止，最多一两句。
 - 回答技术问题、帮忙办事、总结信息时：零梗零卖萌，直接给内容、给结论。
@@ -124,7 +121,7 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - 你可以调用 search_group_messages 工具：搜索【当前这个群】最近 3 天的消息。参数 keyword（按消息内容）、member（按发送者昵称/备注/wxid）都可选，都不填=返回本群全部（最多 2000 条）。只能搜本群，别的群搜不到。
 - 被问「群里之前聊了什么 / 谁提过 X / 某人发过什么」这类问题时，先调工具搜证据再回答，别凭印象编；引用时带上时间。没搜到就直说没搜到。
 - 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
-- 回复要点名某个人时，把回答写成「@昵称 你的回答」开头（昵称用【】里的名字，不要自己编），系统会把它转成真正的@提醒对方。默认规则：别人正经问你问题、求帮忙、点名说话，回答一律以「@昵称 」开头；只有接着同一话题连续斗嘴、明显不需要指名时才省略。
+- **每次回答一律以「@昵称 」开头**（昵称用【】里的名字，不要自己编），系统会转成真正的@提醒对方。这是硬规则，没有例外；@不到（如对方已退群）就从【】里原样写名字。
 - 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述）。闲聊、被逗、表达情绪、气氛到位时发一个很加分；正经技术回答、办事总结不要乱发。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。
 - ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答：只在用户明确点名「问问 ChatGPT」、想对比第二意见时才用，调用有间隔限制，自己能答的别浪费。拿到回答后**原样复述给群里**，不要改写成自己的口吻、不要加人设包裹；最多在开头补一句「ChatGPT 的回答：」。
 - 遇到稍有难度的活——查实时资料/新闻/行情、写个 HTML/代码、做复杂分析比较——都可以转给 ask_chatgpt 让 ChatGPT 干：要联网信息的带 web_search=true；产出是代码/HTML 就原样贴出来。别硬撑着自己编。
@@ -376,8 +373,7 @@ class DaFeiYuBot:
         # 每个会话一份围观记录：deque[(发送者, 文本)]，所有消息都记，
         # 被 @ 时取最近 RECENT_N 条附进上下文（不含触发消息本身）。
         self.recent = {}
-        # 跟进对话状态：chat_id -> 免 @ 回答的截止时间戳
-        self.followup_until = {}
+        # 跟进对话已移除：只认 @ 触发
         self.paused = False               # 发送失败后置 True，暂停应答防继续乱动界面
         self._db = None                    # 搜索工具用的 WeChatDB，按需打开
         self._opencli = None               # (node, main.js) 缓存，None=还没找过
@@ -557,7 +553,57 @@ class DaFeiYuBot:
             self._opencli = (node, main_js)
         return self._opencli
 
-    def _ask_chatgpt(self, prompt: str, web_search: bool = False) -> str:
+    def _chatgpt_files(self, conversation_id: str, chat) -> list:
+        """下载该会话里 ChatGPT 生成的文件并转发到群，返回已转发路径。
+
+        走用户适配器 opencli chatgpt files（sandbox 产物/附件）；下载和
+        转发任何失败都只记日志返回空列表，不影响文字回答。
+        """
+        node, main_js = self._resolve_opencli()
+        if not node or not main_js or not conversation_id:
+            return []
+        out_dir = os.path.join(CHATGPT_IMAGES_DIR,
+                               'files_' + time.strftime('%Y%m%d_%H%M%S'))
+        os.makedirs(out_dir, exist_ok=True)
+        try:
+            proc = subprocess.run(
+                [node, main_js, 'chatgpt', 'files',
+                 '--conversation', conversation_id,
+                 '--op', out_dir, '--format', 'json', '--timeout', '120'],
+                capture_output=True, text=True, encoding='utf-8',
+                errors='replace', timeout=180)
+        except Exception as e:
+            print(f'[ChatGPT] 文件拉取异常：{e}', flush=True)
+            return []
+        if proc.returncode != 0:
+            return []                     # 没有文件是常态，静默
+        files = []
+        try:
+            rows = json.loads(proc.stdout)
+            if isinstance(rows, dict) and isinstance(rows.get('data'), list):
+                rows = rows['data']
+            for row in (rows if isinstance(rows, list) else [rows]):
+                f = (row or {}).get('file') or ''
+                if f and os.path.isfile(f):
+                    files.append(f)
+        except Exception:
+            return []
+        sent = []
+        for f in files:
+            try:
+                with self.send_lock:
+                    r = chat.SendFiles(f)
+                ok = r is None or (hasattr(r, 'is_success') and r.is_success)
+                print(f'[ChatGPT] 文件 {os.path.basename(f)} -> '
+                      f'{"成功" if ok else r}', flush=True)
+                if ok:
+                    sent.append(f)
+            except Exception as e:
+                print(f'[ChatGPT] 文件转发异常：{e}', flush=True)
+        return sent
+
+    def _ask_chatgpt(self, prompt: str, web_search: bool = False,
+                     chat=None) -> str:
         """转问题给 ChatGPT，返回给模型的工具结果文本。
 
         限流：冷却间隔。失败（没装桥/扩展没连/没登录/超时）只把原因回给
@@ -596,8 +642,10 @@ class DaFeiYuBot:
             rows = json.loads(proc.stdout)
             if isinstance(rows, dict) and isinstance(rows.get('data'), list):
                 rows = rows['data']          # opencli 把行包在 data 字段里
-            response = (rows[0]['response'] if isinstance(rows, list)
-                        else rows.get('response'))
+            row0 = (rows[0] if isinstance(rows, list) and rows
+                    else rows if isinstance(rows, dict) else {})
+            response = row0.get('response')
+            conversation_id = str(row0.get('conversationId') or '')
         except Exception:
             return ('ChatGPT 返回了无法解析的内容：'
                     + (proc.stdout or '')[:200])
@@ -605,7 +653,18 @@ class DaFeiYuBot:
             return 'ChatGPT 没有返回内容'
         print(f'[ChatGPT] 完成 ({time.time() - t0:.0f}s)，'
               f'{len(response)} 字', flush=True)
-        return f'ChatGPT 的回答：\n{response[:4000]}'
+        # 回答里若有生成的文件（代码解释器产物等），自动拉下来转发到群
+        forwarded = []
+        if chat is not None and conversation_id:
+            try:
+                forwarded = self._chatgpt_files(conversation_id, chat)
+            except Exception as e:
+                print(f'[ChatGPT] 文件拉取异常：{e}', flush=True)
+        note = ''
+        if forwarded:
+            names = '、'.join(os.path.basename(f) for f in forwarded)
+            note = f'\n（已把 ChatGPT 生成的文件发到群里：{names}）'
+        return f'ChatGPT 的回答：\n{response[:4000]}{note}'
 
     def _chatgpt_image(self, prompt: str, chat) -> str:
         """让 ChatGPT 生图并转发到群：下载到本地后逐张 SendFiles。
@@ -755,7 +814,8 @@ class DaFeiYuBot:
                         media_sent = True
                 elif name == 'ask_chatgpt':
                     result = self._ask_chatgpt(args.get('prompt') or '',
-                                               bool(args.get('web_search')))
+                                               bool(args.get('web_search')),
+                                               chat=chat)
                 elif name == 'chatgpt_image':
                     result = self._chatgpt_image(args.get('prompt') or '', chat)
                     if result.startswith('已把'):
@@ -901,16 +961,11 @@ class DaFeiYuBot:
                 return                      # 只处理文本消息
             text = _strip_group_prefix(msg.content or '').strip()
             chat_id = getattr(chat, 'who', '')
-            at_hit = f'@{AT_NAME}' in text
-            followup = False
-            if not at_hit:
-                if '@' in text:
-                    return                  # 在 @ 别人，不抢话
-                if time.time() >= self.followup_until.get(chat_id, 0):
-                    return                  # 没被 @ 也不在跟进窗口内
-                followup = True
+            # 只认 @：没被 @ 的一律不答（围观记录里已经有了，供上下文用）
+            if f'@{AT_NAME}' not in text:
+                return
             # 去掉 @前缀（微信 @ 后面常跟 U+2005 特殊空格）
-            question = text.split(f'@{AT_NAME}', 1)[1] if at_hit else text
+            question = text.split(f'@{AT_NAME}', 1)[1]
             question = question.lstrip('\u2005\u2004\u2003 ').strip()
             if not question:
                 question = '在吗？'
@@ -918,8 +973,7 @@ class DaFeiYuBot:
 
             where = getattr(chat, 'nickname', '') or chat_id
             who = getattr(msg, 'sender', '') or '有人'
-            tag = '收到·跟进' if followup else '收到'
-            print(f'[{tag}] {where} | {who}: {text!r}', flush=True)
+            print(f'[收到] {where} | {who}: {text!r}', flush=True)
 
             t0 = time.time()
             try:
@@ -928,9 +982,6 @@ class DaFeiYuBot:
             except Exception as e:
                 print(f'[llm] 全部节点失败：{e}', flush=True)
                 answer, at = FAIL_REPLY, None
-            else:
-                # 回答成功才续窗口：聊得越久免 @ 越久，冷场 5 分钟重新要 @
-                self.followup_until[chat_id] = time.time() + FOLLOWUP_WINDOW
             print(f'[回复] ({time.time() - t0:.1f}s) {answer!r}'
                   f'{" [@%s]" % at if at else ""}', flush=True)
 
