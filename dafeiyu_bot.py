@@ -89,11 +89,12 @@ LLM_TIMEOUT = 90            # 单节点请求超时（秒）
 MAX_TOKENS = 600
 
 # -- ChatGPT 桥（经 opencli，走你登录态的 Chrome）--------------------------
-# 只开放 chatgpt ask 这一个口子：固定纯文本、固定新问题，不暴露切模型/
-# 指定会话/传文件/深度研究等参数；冷却 + 每天上限双限流防风控。
+# 只开放 chatgpt ask / image 两个口子：固定纯文本，不暴露切模型/指定会话/
+# 传文件/深度研究等参数；冷却限流防风控。
 CHATGPT_COOLDOWN = 60       # 两次调用最小间隔（秒）
-CHATGPT_DAILY_CAP = 20      # 每天最多调用次数
-CHATGPT_TIMEOUT = 90        # ask 等回答的超时（秒）
+CHATGPT_TIMEOUT = 240       # ask / image 等回答的超时（秒），4 分钟
+CHATGPT_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'chatgpt_images')   # ChatGPT 生图下载目录
 
 SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸鱼娘（前身「防火女」，现在活泼爱偷吃，偶尔穿女仆装），在微信群里当助手。
 
@@ -125,7 +126,8 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
 - 回复要点名某个人时，把回答写成「@昵称 你的回答」开头（昵称用【】里的名字，不要自己编），系统会把它转成真正的@提醒对方。默认规则：别人正经问你问题、求帮忙、点名说话，回答一律以「@昵称 」开头；只有接着同一话题连续斗嘴、明显不需要指名时才省略。
 - 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述）。闲聊、被逗、表达情绪、气氛到位时发一个很加分；正经技术回答、办事总结不要乱发。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。
-- ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答：只在用户明确点名「问问 ChatGPT」、想对比第二意见时才用，每天有次数上限，自己能答的别浪费。拿到回答后用自己的口吻转述（说明这是 ChatGPT 说的），别原文照搬一长段。"""
+- ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答：只在用户明确点名「问问 ChatGPT」、想对比第二意见时才用，调用有间隔限制，自己能答的别浪费。拿到回答后用自己的口吻转述（说明这是 ChatGPT 说的），别原文照搬一长段。
+- chatgpt_image 工具能让 ChatGPT 画图并把图片转发到群里：只在用户明确要求「画/生成图片」时用；画图要等几分钟，用了就告诉大家「正在画，稍等」。"""
 
 FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
 
@@ -144,6 +146,26 @@ CHATGPT_TOOL = {
             'properties': {
                 'prompt': {'type': 'string',
                            'description': '转给 ChatGPT 的完整问题'},
+            },
+            'required': ['prompt'],
+        },
+    },
+}
+
+# ChatGPT 生图工具：生成图片自动下载到本地并转发到群里
+CHATGPT_IMAGE_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'chatgpt_image',
+        'description': (
+            '让 ChatGPT 生成图片（画图/作图），图片会自动下载并转发到'
+            '本群。只在用户明确要求画图/生成图片时使用；生成可能要几分钟。'
+            'prompt 要详细描述想要的画面。'),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'prompt': {'type': 'string',
+                           'description': '给 ChatGPT 的画图描述'},
             },
             'required': ['prompt'],
         },
@@ -530,32 +552,28 @@ class DaFeiYuBot:
     def _ask_chatgpt(self, prompt: str) -> str:
         """转问题给 ChatGPT，返回给模型的工具结果文本。
 
-        限流：冷却 + 每天上限。失败（没装桥/扩展没连/没登录/超时）只把
-        原因回给模型，不影响其它回答链路。
+        限流：冷却间隔。失败（没装桥/扩展没连/没登录/超时）只把原因回给
+        模型，不影响其它回答链路。
         """
         prompt = (prompt or '').strip()
         if not prompt:
             return '错误：prompt 不能为空'
         now = time.time()
-        day = time.strftime('%Y-%m-%d')
-        if self._cgpt_day != day:
-            self._cgpt_day, self._cgpt_count = day, 0
         if now - self._cgpt_last < CHATGPT_COOLDOWN:
             wait = int(CHATGPT_COOLDOWN - (now - self._cgpt_last)) + 1
             return f'调用太频繁，请 {wait} 秒后再试'
-        if self._cgpt_count >= CHATGPT_DAILY_CAP:
-            return '今天调用 ChatGPT 的次数已达上限，明天再用'
         node, main_js = self._resolve_opencli()
         if not node or not main_js:
             return 'ChatGPT 桥不可用：本机没找到 opencli 运行时'
-        print(f'[ChatGPT] 转问（今天第 {self._cgpt_count + 1} 次）…', flush=True)
+        self._cgpt_last = now
+        print('[ChatGPT] 转问…', flush=True)
         t0 = time.time()
         try:
             proc = subprocess.run(
                 [node, main_js, 'chatgpt', 'ask', prompt,
                  '--format', 'json', '--timeout', str(CHATGPT_TIMEOUT)],
                 capture_output=True, text=True, encoding='utf-8',
-                errors='replace', timeout=CHATGPT_TIMEOUT + 30)
+                errors='replace', timeout=CHATGPT_TIMEOUT + 60)
         except subprocess.TimeoutExpired:
             return 'ChatGPT 超时没有给出回答'
         except FileNotFoundError:
@@ -573,10 +591,71 @@ class DaFeiYuBot:
                     + (proc.stdout or '')[:200])
         if not (response or '').strip():
             return 'ChatGPT 没有返回内容'
-        self._cgpt_last, self._cgpt_count = now, self._cgpt_count + 1
         print(f'[ChatGPT] 完成 ({time.time() - t0:.0f}s)，'
               f'{len(response)} 字', flush=True)
         return f'ChatGPT 的回答：\n{response[:4000]}'
+
+    def _chatgpt_image(self, prompt: str, chat) -> str:
+        """让 ChatGPT 生图并转发到群：下载到本地后逐张 SendFiles。
+
+        失败只把原因回给模型；下载到的文件按次放独立子目录，不自动清理。
+        """
+        prompt = (prompt or '').strip()
+        if not prompt:
+            return '错误：prompt 不能为空'
+        if chat is None:
+            return '当前模式无法转发图片，请改用文字回答'
+        now = time.time()
+        if now - self._cgpt_last < CHATGPT_COOLDOWN:
+            wait = int(CHATGPT_COOLDOWN - (now - self._cgpt_last)) + 1
+            return f'调用太频繁，请 {wait} 秒后再试'
+        node, main_js = self._resolve_opencli()
+        if not node or not main_js:
+            return 'ChatGPT 桥不可用：本机没找到 opencli 运行时'
+        out_dir = os.path.join(CHATGPT_IMAGES_DIR,
+                               time.strftime('%Y%m%d_%H%M%S'))
+        os.makedirs(out_dir, exist_ok=True)
+        self._cgpt_last = now
+        print('[ChatGPT] 生图…', flush=True)
+        t0 = time.time()
+        try:
+            proc = subprocess.run(
+                [node, main_js, 'chatgpt', 'image', prompt,
+                 '--out', out_dir, '--format', 'json',
+                 '--timeout', str(CHATGPT_TIMEOUT)],
+                capture_output=True, text=True, encoding='utf-8',
+                errors='replace', timeout=CHATGPT_TIMEOUT + 90)
+        except subprocess.TimeoutExpired:
+            return 'ChatGPT 生图超时了'
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or '').strip()[:300]
+            return (f'ChatGPT 生图失败：{err or "未知错误"}'
+                    f'（检查 Chrome 的 OpenCLI 扩展和 chatgpt.com 登录态）')
+        files = []
+        try:
+            rows = json.loads(proc.stdout)
+            for row in (rows if isinstance(rows, list) else [rows]):
+                f = (row or {}).get('file') or ''
+                if f and os.path.isfile(f):
+                    files.append(f)
+        except Exception:
+            pass
+        if not files:
+            return ('生图完成但没下载到图片文件：'
+                    + (proc.stdout or '')[:200])
+        with self.send_lock:
+            sent = []
+            for f in files:
+                r = chat.SendFiles(f)
+                ok = r is None or (hasattr(r, 'is_success') and r.is_success)
+                print(f'[ChatGPT] 图片 {os.path.basename(f)} -> '
+                      f'{"成功" if ok else r}', flush=True)
+                if ok:
+                    sent.append(f)
+        if not sent:
+            return '图片下载到了，但发到微信群失败了，请改用文字描述'
+        return (f'已把 ChatGPT 生成的 {len(sent)}/{len(files)} 张图片'
+                f'发到群里，之后正常给文字回答')
 
     def think(self, chat_id: str, question: str, recent: str = '',
               who: str = '', chat=None) -> tuple:
@@ -613,7 +692,7 @@ class DaFeiYuBot:
         for _ in range(TOOL_ROUNDS):
             try:
                 m = self.llm.chat_raw(
-                    msgs, tools=[SEARCH_TOOL, CHATGPT_TOOL,
+                    msgs, tools=[SEARCH_TOOL, CHATGPT_TOOL, CHATGPT_IMAGE_TOOL,
                                  self._sticker_tool()])
             except Exception as e:
                 print(f'[agent] 工具请求失败（{e}），降级为无工具直答',
@@ -644,6 +723,10 @@ class DaFeiYuBot:
                         media_sent = True
                 elif name == 'ask_chatgpt':
                     result = self._ask_chatgpt(args.get('prompt') or '')
+                elif name == 'chatgpt_image':
+                    result = self._chatgpt_image(args.get('prompt') or '', chat)
+                    if result.startswith('已把'):
+                        media_sent = True
                 else:
                     result = self._exec_tool(name, args, chat_id)
                 msgs.append({'role': 'tool',
