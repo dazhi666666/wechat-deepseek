@@ -22,3 +22,7 @@ wechatauto_logs/
 .idea/
 .vscode/
 chatgpt_images/
+
+# 本地私密文件（含内网地址/密钥/聊天数据），绝不入库
+start_bot.cmd
+_llm_distill.py
