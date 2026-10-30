@@ -31,6 +31,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from collections import deque
 
@@ -123,6 +124,7 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - 你可以调用 search_group_messages 工具：搜索【当前这个群】最近 3 天的消息。参数 keyword（按消息内容）、member（按发送者昵称/备注/wxid）都可选，都不填=返回本群全部（最多 2000 条）。只能搜本群，别的群搜不到。
 - 被问「群里之前聊了什么 / 谁提过 X / 某人发过什么」这类问题时，先调工具搜证据再回答，别凭印象编；引用时带上时间。没搜到就直说没搜到。
 - 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
+- get_ai_news 工具能查 AI 圈实时资讯：action=hot 当前热点榜 Top10 / latest 最近 24 小时精选动态（可带 keyword、category 过滤） / daily 今日日报。被问「最近 AI 有什么新闻/热点/大事件」时先调它拿真数据再回答，别凭印象编。
 - **每次回答一律以「@昵称 」开头**（昵称用【】里的名字，不要自己编），系统会转成真正的@提醒对方。这是硬规则，没有例外；@不到（如对方已退群）就从【】里原样写名字。
 - 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述，很多文件名本身就写了使用场景，照着挑）。**主动发、多发**：不用等别人要求——闲聊、被逗、吐槽、表达情绪、回答开头或结尾调节气氛、看到离谱/好笑的消息、干活报进度，场景合适就自己来一张；只有纯技术答疑、连续正经办事时才克制。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。
 - ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答（调用有间隔限制，自己能答的别浪费）。拿到回答后**原样复述给群里**，不要改写成自己的口吻、不要加人设包裹；最多在开头补一句「ChatGPT 的回答：」。
@@ -219,6 +221,38 @@ SEARCH_TOOL = {
                 'member': {'type': 'string',
                            'description': '发送者昵称/备注/wxid'},
             },
+        },
+    },
+}
+
+# AI 资讯工具：aihot.news 免费匿名 API（匿名 GET，约 60 次/分限流）
+AIHOT_BASE = 'https://aihot.news/api/v1'
+AIHOT_CATEGORIES = ('ai-models', 'ai-products', 'industry',
+                    'paper', 'tip', 'opinion')
+AIHOT_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'get_ai_news',
+        'description': (
+            '查询 AI 圈实时资讯（来源 aihot.news 聚合站）。action 三选一：'
+            'hot=当前热点榜 Top10；latest=最近 24 小时精选动态（可带 '
+            'keyword 关键词、category 分类过滤）；daily=今日 AI 日报。'
+            '被问「最近 AI 有什么新闻/热点/大事件」时先调它拿真数据，'
+            '别凭印象编。'),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'action': {'type': 'string',
+                           'enum': ['hot', 'latest', 'daily'],
+                           'description': 'hot=热榜 latest=最新动态 '
+                                          'daily=日报'},
+                'keyword': {'type': 'string',
+                            'description': 'latest 模式下的关键词过滤'},
+                'category': {'type': 'string',
+                             'enum': list(AIHOT_CATEGORIES),
+                             'description': 'latest 模式下的分类过滤'},
+            },
+            'required': ['action'],
         },
     },
 }
@@ -867,7 +901,7 @@ class DaFeiYuBot:
             try:
                 m = self.llm.chat_raw(
                     msgs, tools=[SEARCH_TOOL, CHATGPT_TOOL, CHATGPT_IMAGE_TOOL,
-                                 SAY_TOOL, self._sticker_tool()])
+                                 SAY_TOOL, AIHOT_TOOL, self._sticker_tool()])
             except Exception as e:
                 print(f'[agent] 工具请求失败（{e}），降级为无工具直答',
                       flush=True)
@@ -905,6 +939,10 @@ class DaFeiYuBot:
                     result = self._chatgpt_image(args.get('prompt') or '', chat)
                     if result.startswith('已把'):
                         media_sent = True
+                elif name == 'get_ai_news':
+                    result = self._ai_news(args.get('action') or 'hot',
+                                           args.get('keyword') or '',
+                                           args.get('category') or '')
                 else:
                     result = self._exec_tool(name, args, chat_id)
                 msgs.append({'role': 'tool',
@@ -930,6 +968,69 @@ class DaFeiYuBot:
         print(f'[工具] {name} {args} -> {len(out)} 字 '
               f'({time.time() - t0:.1f}s)', flush=True)
         return out
+
+    # -- AI 资讯工具（aihot.news）-----------------------------------------
+
+    def _ai_news(self, action: str, keyword: str = '',
+                 category: str = '') -> str:
+        """查 aihot.news 的 AI 资讯（get_ai_news 工具实现）。
+
+        免费匿名 GET，失败只把原因回给模型，不影响其它链路。
+        """
+        action = (action or 'hot').strip().lower()
+
+        def _get(path: str):
+            req = urllib.request.Request(
+                AIHOT_BASE + path, headers={'User-Agent': 'dafeiyu-bot/1.0'})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.loads(r.read().decode('utf-8'))
+
+        try:
+            if action == 'hot':
+                data = _get('/hot-topics')
+                lines = [f"{it.get('rank')}. {it.get('title')}"
+                         f"（{it.get('sourceCount', 0)} 个来源）"
+                         for it in data.get('items', [])[:10] if it.get('title')]
+                return ('当前 AI 热点榜：\n' + '\n'.join(lines)) if lines \
+                    else '热榜暂时为空'
+            if action == 'daily':
+                rep = (_get('/dailies/latest').get('report') or {})
+                out = [f"AI 日报 {rep.get('date', '')}"]
+                lead = rep.get('lead') or {}
+                if lead.get('title'):
+                    out.append(f"头条：{lead['title']}")
+                    if lead.get('leadParagraph'):
+                        out.append(lead['leadParagraph'])
+                for sec in rep.get('sections', []):
+                    titles = [i.get('title', '') for i in sec.get('items', [])
+                              if i.get('title')]
+                    if titles:
+                        out.append(f"{sec.get('label', '')}："
+                                   + '；'.join(titles))
+                return '\n'.join(out)[:4000] if len(out) > 1 \
+                    else '日报还没生成（每天 08:00 后可查）'
+            if action == 'latest':
+                q = {'mode': 'selected', 'window': '24h', 'limit': 10}
+                if keyword.strip():
+                    q['q'] = keyword.strip()
+                if category.strip() in AIHOT_CATEGORIES:
+                    q['category'] = category.strip()
+                data = _get('/items?' + urllib.parse.urlencode(q))
+                lines = []
+                for it in data.get('items', []):
+                    line = f"- {it.get('title') or ''}"
+                    s = (it.get('summary') or '').strip()
+                    if s:
+                        line += f'：{s[:120]}'
+                    ts = (it.get('publishedAt') or '')[:16].replace('T', ' ')
+                    if ts:
+                        line += f'（{ts}）'
+                    lines.append(line)
+                return ('最近 24 小时 AI 精选：\n' + '\n'.join(lines)) \
+                    if lines else '最近 24 小时没有精选动态'
+            return f'未知 action：{action}（hot / latest / daily）'
+        except Exception as e:
+            return f'AI 资讯查询失败：{type(e).__name__}: {e}'
 
     # -- 群消息搜索工具 ---------------------------------------------------
 
