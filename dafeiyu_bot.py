@@ -1200,8 +1200,59 @@ class DaFeiYuBot:
 
     # -- 启停 -----------------------------------------------------------
 
+    @staticmethod
+    def _restore_wechat_window() -> bool:
+        """把收进托盘（不可见）的微信主窗口还原出来。
+
+        WeChatGUI 定位主窗口只认可见顶层窗口，微信一托盘化启动就报
+        「未找到微信主窗口」。这里按标题/类名把隐藏的主窗口找出来
+        ShowWindow 还原（类名前缀与 wechatauto.guia 的判定保持一致）。
+        """
+        import ctypes
+        from ctypes import wintypes
+
+        u = ctypes.windll.user32
+        best = [0, 0, '']          # [得分, 面积, hwnd]
+
+        def _cb(h, lp):
+            buf = ctypes.create_unicode_buffer(256)
+            cls = ctypes.create_unicode_buffer(256)
+            u.GetWindowTextW(h, buf, 256)
+            u.GetClassNameW(h, cls, 256)
+            title, cls_name = buf.value.strip(), cls.value
+            score = 0
+            if cls_name.startswith('Qt51514QWindowIcon'):
+                score += 4
+            if any(k in title for k in ('微信', 'Weixin', 'WeChat')):
+                score += 5
+            if not score or u.IsWindowVisible(h):
+                return True          # 可见窗口轮不到我们管
+            r = wintypes.RECT()
+            u.GetWindowRect(h, ctypes.byref(r))
+            area = max(0, r.right - r.left) * max(0, r.bottom - r.top)
+            if area > 0 and (score, area) > (best[0], best[1]):
+                best[:] = [score, area, h]
+            return True
+
+        CB = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND,
+                                wintypes.LPARAM)
+        u.EnumWindows(CB(_cb), 0)
+        if not best[2]:
+            return False
+        u.ShowWindow(best[2], 9)               # SW_RESTORE
+        time.sleep(1.5)                        # 等窗口完成渲染再交回 WeChat()
+        print(f'[启动] 已还原微信主窗口（hwnd={best[2]}）', flush=True)
+        return True
+
     def run(self) -> None:
-        wx = WeChat()
+        try:
+            wx = WeChat()
+        except RuntimeError as e:
+            # 微信收进托盘时主窗口不可见——自动还原一次再试，不再直接失败
+            if '未找到微信主窗口' not in str(e) \
+                    or not self._restore_wechat_window():
+                raise
+            wx = WeChat()
         r = wx.AddListenAll(self.on_message)
         if r is not None and hasattr(r, 'is_success') and not r.is_success:
             print(f'开启全局监听失败：{r}', flush=True)
