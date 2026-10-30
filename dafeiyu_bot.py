@@ -545,7 +545,14 @@ class DaFeiYuBot:
 
     # -- LLM 组装 -----------------------------------------------------
 
-    def _build_messages(self, st: dict, question: str, recent: str = '') -> list:
+    def _build_messages(self, st: dict, question: str) -> list:
+        """严格前缀追加：开头固定，其余内容只会在末尾长出新块。
+
+        「最近群消息」不再作为临时 system 消息插在倒数第二位（那样下一轮
+        同位置内容就变了，前缀从那里断开），而是由 think 拼进问题消息并随
+        (q, answer) 进历史——下一轮它原样出现在同一位置，vLLM 前缀缓存才能
+        整段命中。唯一允许的前缀失效是滚动压缩和表情列表变化。
+        """
         msgs = [{'role': 'system', 'content': SYSTEM_PROMPT}]
         if st['summary']:
             msgs.append({'role': 'system',
@@ -553,8 +560,6 @@ class DaFeiYuBot:
         for q, a in st['turns']:
             msgs += [{'role': 'user', 'content': q},
                      {'role': 'assistant', 'content': a}]
-        if recent:
-            msgs.append({'role': 'system', 'content': recent})
         msgs.append({'role': 'user', 'content': question})
         return msgs
 
@@ -923,7 +928,11 @@ class DaFeiYuBot:
             chat_id, {'summary': '', 'turns': deque()})
         self._maybe_compress(chat_id, st)
         q = f'【{who}】{question}' if who else question
-        msgs = self._build_messages(st, q, recent)
+        if recent:
+            # 围观记录拼进问题消息开头并随 (q, answer) 进历史：下一轮它原样
+            # 留在原位，跨轮上下文严格前缀追加，vLLM 前缀缓存才能整段命中
+            q = f'{recent}\n\n{q}'
+        msgs = self._build_messages(st, q)
         answer = self._agent_loop(msgs, chat_id, chat)
         at = None
         if answer.startswith('@'):
