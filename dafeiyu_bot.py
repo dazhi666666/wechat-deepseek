@@ -689,10 +689,17 @@ class DaFeiYuBot:
         msgs = self._build_messages(st, q, recent)
         answer = self._agent_loop(msgs, chat_id, chat)
         at = None
-        m = re.match(r'^@(\S{1,32})\s*', answer)
-        if m and m.group(1) not in (AT_NAME,):
-            at = m.group(1)
-            answer = answer[m.end():].lstrip()
+        if answer.startswith('@'):
+            # 优先按已知的发送者全名匹配（昵称可能带空格/emoji，按空白截断
+            # 会切坏名字，实测 🍒 ୯ChouZa୬ 这种装饰名就翻车了）
+            if who and answer[1:].startswith(who):
+                at = who
+                answer = answer[1 + len(who):].lstrip(' \u2005，,：:')
+            else:
+                m = re.match(r'^@(\S{1,32})\s*', answer)
+                if m and m.group(1) not in (AT_NAME,):
+                    at = m.group(1)
+                    answer = answer[m.end():].lstrip()
         st['turns'].append((q, answer))
         return answer, at
 
