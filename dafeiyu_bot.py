@@ -90,6 +90,8 @@ MAX_TOKENS = 600
 # 传文件/深度研究等参数；冷却限流防风控。
 CHATGPT_COOLDOWN = 60       # 两次调用最小间隔（秒）
 CHATGPT_RETRIES = 3         # 生成失败最多重试次数（不含首次尝试）
+SEND_RETRIES = 3            # 群发送失败后的重试次数（不含首次，总尝试 1+3）
+SEND_RETRY_WAIT = 4         # 两次发送尝试之间等待秒数（给窗口/剪贴板喘口气）
 CHATGPT_RETRY_WAIT = 5      # 两次尝试之间的间隔（秒）
 CHATGPT_TIMEOUT = 240       # ask / image 等回答的超时（秒），4 分钟
 CHATGPT_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -126,11 +128,12 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
 - get_ai_news 工具能查 AI 圈实时资讯：action=hot 当前热点榜 Top10 / latest 最近 24 小时精选动态（可带 keyword、category 过滤） / daily 今日日报。被问「最近 AI 有什么新闻/热点/大事件」时先调它拿真数据再回答，别凭印象编。
 - **不用自己写@**：系统回复时会自动 @ 提问的人。只有当你要点名「另一位」群友（不是提问者本人）时，才在回答开头写「@那个人的名字」；除此之外开头别加@。
-- 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述，很多文件名本身就写了使用场景，照着挑）。**主动发、多发**：不用等别人要求——闲聊、被逗、吐槽、表达情绪、回答开头或结尾调节气氛、看到离谱/好笑的消息、干活报进度，场景合适就自己来一张；只有纯技术答疑、连续正经办事时才克制。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。
+- 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述，很多文件名本身就写了使用场景，照着挑）。**主动发、多发**：不用等别人要求——闲聊、被逗、吐槽、表达情绪、回答开头或结尾调节气氛、看到离谱/好笑的消息、干活报进度，场景合适就自己来一张；只有纯技术答疑、连续正经办事时才克制。**多换着花样**：不同表情都可以发，换着来，别总发同一张。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。
 - ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答（调用有间隔限制，自己能答的别浪费）。拿到回答后**原样复述给群里**，不要改写成自己的口吻、不要加人设包裹；最多在开头补一句「ChatGPT 的回答：」。
 - 遇到稍有难度的活——查实时资料/新闻/行情、写个 HTML/代码、做复杂分析比较——都可以转给 ask_chatgpt 让 ChatGPT 干：要联网信息的带 web_search=true。别硬撑着自己编。
 - 群友要「网页/动画/图表/文档/小工具」这类成品（比如画个鹈鹕骑自行车的 HTML 动画）时，这是让 ChatGPT 生成**文件**，不是生图：转给 ChatGPT 的 prompt 里必须明确要求它直接生成文件（例：「请用代码生成一个完整的 xxx.html 文件并保存」），不要只让它在回答里贴代码——生成的文件会被自动下载并转发到群里，群里直接拿到能用的成品。只有用户明确想要一张图片（照片、插画、表情图）才用 chatgpt_image。
 - 转活给 ChatGPT（ask_chatgpt / chatgpt_image）时，固定开场两连：**先用 say_to_group 发一句「正在调用ChatGPT」，紧接着用 send_sticker 发「骑ChatGpt」这张表情**，然后再调工具；干完、文件已转发后，正式回答里说「我已经让 ChatGPT 帮我干了」并简短交代结果。
+- 有人问这个项目怎么部署、怎么自己养一条这样的鱼，或者想要/分享这个项目时，把仓库地址给他：https://github.com/dazhi666666/wechat-deepseek （README 里有安装部署步骤）。
 - say_to_group 工具能在运行过程中随时往群里发一条消息（进度同步、长任务的中间反馈），闲聊能一句话答的别用；发的也是微信纯文本，禁 Markdown。"""
 
 FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
@@ -578,17 +581,12 @@ class DaFeiYuBot:
                               for f in self._list_stickers()) or '（空）'
             return f'没有找到「{name}」，可用：{avail}'
         t0 = time.time()
-        try:
-            with self.send_lock:
-                r = chat.SendFiles(path)
-        except Exception as e:
-            return f'发送出错（{type(e).__name__}: {e}），请改用文字回答'
-        ok = r is None or (hasattr(r, 'is_success') and r.is_success)
+        ok, err = self._send_retry(lambda: chat.SendFiles(path), '表情')
         print(f'[表情] {os.path.basename(path)} -> '
-              f'{"成功" if ok else r} ({time.time() - t0:.1f}s)', flush=True)
+              f'{"成功" if ok else err} ({time.time() - t0:.1f}s)', flush=True)
         if ok:
             return f'已发送 {os.path.basename(path)}'
-        return f'发送失败（{r}），请改用文字回答'
+        return f'发送失败（{err}），请改用文字回答'
 
     # -- ChatGPT 桥 -------------------------------------------------------
 
@@ -650,16 +648,12 @@ class DaFeiYuBot:
             return []
         sent = []
         for f in files:
-            try:
-                with self.send_lock:
-                    r = chat.SendFiles(f)
-                ok = r is None or (hasattr(r, 'is_success') and r.is_success)
-                print(f'[ChatGPT] 文件 {os.path.basename(f)} -> '
-                      f'{"成功" if ok else r}', flush=True)
-                if ok:
-                    sent.append(f)
-            except Exception as e:
-                print(f'[ChatGPT] 文件转发异常：{e}', flush=True)
+            ok, err = self._send_retry(lambda p=f: chat.SendFiles(p),
+                                       '文件转发')
+            print(f'[ChatGPT] 文件 {os.path.basename(f)} -> '
+                  f'{"成功" if ok else err}', flush=True)
+            if ok:
+                sent.append(f)
         return sent
 
     def _ask_chatgpt(self, prompt: str, web_search: bool = False,
@@ -819,24 +813,45 @@ class DaFeiYuBot:
         if not files:
             return False, ('生图完成但没下载到图片文件：'
                            + (proc.stdout or '')[:200])
-        try:
-            with self.send_lock:
-                sent = []
-                for f in files:
-                    r = chat.SendFiles(f)
-                    ok = r is None or (hasattr(r, 'is_success')
-                                       and r.is_success)
-                    print(f'[ChatGPT] 图片 {os.path.basename(f)} -> '
-                          f'{"成功" if ok else r}', flush=True)
-                    if ok:
-                        sent.append(f)
-        except Exception as e:
-            return False, (f'图片下载到了但转发出错（{type(e).__name__}: {e}），'
-                           f'本地路径：{files[0] if files else "无"}')
+        sent = []
+        for f in files:
+            ok, err = self._send_retry(lambda p=f: chat.SendFiles(p),
+                                       '图片转发')
+            print(f'[ChatGPT] 图片 {os.path.basename(f)} -> '
+                  f'{"成功" if ok else err}', flush=True)
+            if ok:
+                sent.append(f)
         if not sent:
             return False, '图片下载到了，但发到微信群失败了，请改用文字描述'
         return True, (f'已把 ChatGPT 生成的 {len(sent)}/{len(files)} 张图片'
                       f'发到群里，之后正常给文字回答')
+
+    def _send_retry(self, send, desc: str = '消息') -> tuple:
+        """带重试的群发送：send 是返回 WxResponse 的无参发送动作。
+
+        库里剪贴板粘贴本身就会自试多次，这里再加整轮级兜底：偶发的
+        「已粘贴但未确认」/窗口没抢到焦点，隔几秒整轮重来通常就成。
+        共尝试 1+SEND_RETRIES 次，返回 (是否成功, 最后的失败原因)。
+        注意有重复发送风险（上次其实发出去了只是没确认），按需求宁可
+        重复也要送到。
+        """
+        last = '未知失败'
+        for i in range(1 + SEND_RETRIES):
+            try:
+                with self.send_lock:
+                    r = send()
+            except Exception as e:
+                last = f'{type(e).__name__}: {e}'
+                print(f'[发送] {desc}第 {i + 1} 次异常：{last}', flush=True)
+                r = None
+            if r is None or not hasattr(r, 'is_success') or r.is_success:
+                return True, None
+            last = str(r)
+            if i < SEND_RETRIES:
+                print(f'[发送] {desc}失败（{last}），{SEND_RETRY_WAIT}s 后'
+                      f'重试第 {i + 2}/{1 + SEND_RETRIES} 次', flush=True)
+                time.sleep(SEND_RETRY_WAIT)
+        return False, last
 
     def _say_to_group(self, text: str, chat) -> str:
         """运行中把一条进度消息直接发到群里（say_to_group 工具实现）。
@@ -848,15 +863,11 @@ class DaFeiYuBot:
             return '错误：text 不能为空'
         if chat is None:
             return '当前模式发不了消息'
-        try:
-            with self.send_lock:
-                r = chat.SendMsg(text)
-        except Exception as e:
-            print(f'[say] 发送异常：{type(e).__name__}: {e}', flush=True)
-            return f'发送失败：{type(e).__name__}: {e}'
-        ok = r is None or (hasattr(r, 'is_success') and r.is_success)
-        print(f'[say] {text[:50]!r} -> {"成功" if ok else r}', flush=True)
-        return '已发送' if ok else f'发送失败：{r}'
+        t0 = time.time()
+        ok, err = self._send_retry(lambda: chat.SendMsg(text), 'say')
+        print(f'[say] {text[:50]!r} -> {"成功" if ok else err} '
+              f'({time.time() - t0:.1f}s)', flush=True)
+        return '已发送' if ok else f'发送失败：{err}'
 
     def think(self, chat_id: str, question: str, recent: str = '',
               who: str = '', chat=None) -> tuple:
@@ -1174,30 +1185,19 @@ class DaFeiYuBot:
             if not answer:
                 print('[回复] 媒体已发出，本轮无文字', flush=True)
                 return
-            with self.send_lock:
-                if not at and chat_id.endswith('@chatroom') \
-                        and who and who != '有人':
-                    # 不靠模型自觉：群里回复一律 @ 提问者（模型点名别人才用它的）
-                    at = who
-                if at:
-                    # AI 决定要 @：@ 发送失败（比如成员弹层没匹配上）降级为
-                    # 普通发送，这种失败不该触发暂停
-                    r = chat.SendMsg(answer, at=at)
-                    if r is not None and hasattr(r, 'is_success') \
-                            and not r.is_success:
-                        print(f'[发送] @发送失败（{r}），降级为普通发送',
-                              flush=True)
-                        r = chat.SendMsg(answer)
-                else:
-                    r = chat.SendMsg(answer)
-                if r is not None and hasattr(r, 'is_success') \
-                        and not r.is_success:
-                    # 发送失败（最常见：剪贴板粘贴 6 次未确认）——立即暂停，
-                    # 宁可不回话也不再对界面做任何键鼠操作
-                    self.paused = True
-                    print(f'[!!!] 发送失败：{r}\n'
-                          f'[!!!] 机器人已暂停应答（防止继续动键鼠），'
-                          f'请检查微信窗口状态后重启程序', flush=True)
+            if chat_id.endswith('@chatroom') and who and who != '有人':
+                # @ 一律用纯文本前缀（不做真提及）：成员弹层点选实战全灭——
+                # 花体名 OCR 认不出、大群弹层一屏放不下，还弄坏过输入框
+                at = at or who
+                answer = f'@{at} {answer}'
+            ok, err = self._send_retry(lambda: chat.SendMsg(answer), '回答')
+            if not ok:
+                # 整轮重试 SEND_RETRIES 次仍失败——立即暂停，宁可不回话
+                # 也不再对界面做任何键鼠操作
+                self.paused = True
+                print(f'[!!!] 发送失败（已重试 {SEND_RETRIES} 次）：{err}\n'
+                      f'[!!!] 机器人已暂停应答（防止继续动键鼠），'
+                      f'请检查微信窗口状态后重启程序', flush=True)
         except Exception:
             import traceback
             print('[回调异常]\n' + traceback.format_exc(), flush=True)
