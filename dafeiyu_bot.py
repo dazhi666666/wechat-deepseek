@@ -88,6 +88,8 @@ MAX_TOKENS = 600
 # 只开放 chatgpt ask / image 两个口子：固定纯文本，不暴露切模型/指定会话/
 # 传文件/深度研究等参数；冷却限流防风控。
 CHATGPT_COOLDOWN = 60       # 两次调用最小间隔（秒）
+CHATGPT_RETRIES = 3         # 生成失败最多重试次数（不含首次尝试）
+CHATGPT_RETRY_WAIT = 5      # 两次尝试之间的间隔（秒）
 CHATGPT_TIMEOUT = 240       # ask / image 等回答的超时（秒），4 分钟
 CHATGPT_IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   'chatgpt_images')   # ChatGPT 生图下载目录
@@ -604,7 +606,7 @@ class DaFeiYuBot:
 
     def _ask_chatgpt(self, prompt: str, web_search: bool = False,
                      chat=None) -> str:
-        """转问题给 ChatGPT，返回给模型的工具结果文本。
+        """转问题给 ChatGPT，失败自动重试（最多 CHATGPT_RETRIES 次）。
 
         限流：冷却间隔。失败（没装桥/扩展没连/没登录/超时）只把原因回给
         模型，不影响其它回答链路。
@@ -620,6 +622,21 @@ class DaFeiYuBot:
         if not node or not main_js:
             return 'ChatGPT 桥不可用：本机没找到 opencli 运行时'
         self._cgpt_last = now
+        result = '未知失败'
+        for attempt in range(1 + CHATGPT_RETRIES):
+            if attempt:
+                print(f'[ChatGPT] 失败，第 {attempt}/{CHATGPT_RETRIES} 次重试…',
+                      flush=True)
+                time.sleep(5)
+            ok, result = self._ask_chatgpt_once(
+                node, main_js, prompt, web_search, chat)
+            if ok:
+                return result
+        return result
+
+    def _ask_chatgpt_once(self, node, main_js, prompt: str,
+                          web_search: bool, chat) -> tuple:
+        """单次 ask 尝试，返回 (是否成功, 给模型的文本)。"""
         print(f'[ChatGPT] 转问{"（联网）" if web_search else ""}…', flush=True)
         t0 = time.time()
         cmd = [node, main_js, 'chatgpt', 'ask', prompt,
@@ -631,13 +648,13 @@ class DaFeiYuBot:
                 cmd, capture_output=True, text=True, encoding='utf-8',
                 errors='replace', timeout=CHATGPT_TIMEOUT + 60)
         except subprocess.TimeoutExpired:
-            return 'ChatGPT 超时没有给出回答'
+            return False, 'ChatGPT 超时没有给出回答'
         except FileNotFoundError:
-            return 'ChatGPT 桥不可用：node 未找到'
+            return False, 'ChatGPT 桥不可用：node 未找到'
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or '').strip()[:300]
-            return (f'ChatGPT 调用失败：{err or "未知错误"}'
-                    f'（检查 Chrome 的 OpenCLI 扩展和 chatgpt.com 登录态）')
+            return False, (f'ChatGPT 调用失败：{err or "未知错误"}'
+                           f'（检查 Chrome 的 OpenCLI 扩展和 chatgpt.com 登录态）')
         try:
             rows = json.loads(proc.stdout)
             if isinstance(rows, dict) and isinstance(rows.get('data'), list):
@@ -647,10 +664,10 @@ class DaFeiYuBot:
             response = row0.get('response')
             conversation_id = str(row0.get('conversationId') or '')
         except Exception:
-            return ('ChatGPT 返回了无法解析的内容：'
-                    + (proc.stdout or '')[:200])
+            return False, ('ChatGPT 返回了无法解析的内容：'
+                           + (proc.stdout or '')[:200])
         if not (response or '').strip():
-            return 'ChatGPT 没有返回内容'
+            return False, 'ChatGPT 没有返回内容'
         print(f'[ChatGPT] 完成 ({time.time() - t0:.0f}s)，'
               f'{len(response)} 字', flush=True)
         # 回答里若有生成的文件（代码解释器产物等），自动拉下来转发到群
@@ -664,10 +681,10 @@ class DaFeiYuBot:
         if forwarded:
             names = '、'.join(os.path.basename(f) for f in forwarded)
             note = f'\n（已把 ChatGPT 生成的文件发到群里：{names}）'
-        return f'ChatGPT 的回答：\n{response[:4000]}{note}'
+        return True, f'ChatGPT 的回答：\n{response[:4000]}{note}'
 
     def _chatgpt_image(self, prompt: str, chat) -> str:
-        """让 ChatGPT 生图并转发到群：下载到本地后逐张 SendFiles。
+        """让 ChatGPT 生图并转发到群，失败自动重试（最多 CHATGPT_RETRIES 次）。
 
         失败只把原因回给模型；下载到的文件按次放独立子目录，不自动清理。
         """
@@ -683,10 +700,23 @@ class DaFeiYuBot:
         node, main_js = self._resolve_opencli()
         if not node or not main_js:
             return 'ChatGPT 桥不可用：本机没找到 opencli 运行时'
+        self._cgpt_last = now
+        result = '未知失败'
+        for attempt in range(1 + CHATGPT_RETRIES):
+            if attempt:
+                print(f'[ChatGPT] 生图失败，第 {attempt}/{CHATGPT_RETRIES} 次'
+                      f'重试…', flush=True)
+                time.sleep(5)
+            ok, result = self._chatgpt_image_once(node, main_js, prompt, chat)
+            if ok:
+                return result
+        return result
+
+    def _chatgpt_image_once(self, node, main_js, prompt: str, chat) -> tuple:
+        """单次生图尝试，返回 (是否成功, 给模型的文本)。"""
         out_dir = os.path.join(CHATGPT_IMAGES_DIR,
                                time.strftime('%Y%m%d_%H%M%S'))
         os.makedirs(out_dir, exist_ok=True)
-        self._cgpt_last = now
         print('[ChatGPT] 生图…', flush=True)
         t0 = time.time()
         try:
@@ -697,11 +727,11 @@ class DaFeiYuBot:
                 capture_output=True, text=True, encoding='utf-8',
                 errors='replace', timeout=CHATGPT_TIMEOUT + 90)
         except subprocess.TimeoutExpired:
-            return 'ChatGPT 生图超时了'
+            return False, 'ChatGPT 生图超时了'
         if proc.returncode != 0:
             err = (proc.stderr or proc.stdout or '').strip()[:300]
-            return (f'ChatGPT 生图失败：{err or "未知错误"}'
-                    f'（检查 Chrome 的 OpenCLI 扩展和 chatgpt.com 登录态）')
+            return False, (f'ChatGPT 生图失败：{err or "未知错误"}'
+                           f'（检查 Chrome 的 OpenCLI 扩展和 chatgpt.com 登录态）')
         files = []
         try:
             rows = json.loads(proc.stdout)
@@ -720,8 +750,8 @@ class DaFeiYuBot:
         except Exception:
             pass
         if not files:
-            return ('生图完成但没下载到图片文件：'
-                    + (proc.stdout or '')[:200])
+            return False, ('生图完成但没下载到图片文件：'
+                           + (proc.stdout or '')[:200])
         try:
             with self.send_lock:
                 sent = []
@@ -734,12 +764,12 @@ class DaFeiYuBot:
                     if ok:
                         sent.append(f)
         except Exception as e:
-            return (f'图片下载到了但转发出错（{type(e).__name__}: {e}），'
-                    f'本地路径：{files[0] if files else "无"}')
+            return False, (f'图片下载到了但转发出错（{type(e).__name__}: {e}），'
+                           f'本地路径：{files[0] if files else "无"}')
         if not sent:
-            return '图片下载到了，但发到微信群失败了，请改用文字描述'
-        return (f'已把 ChatGPT 生成的 {len(sent)}/{len(files)} 张图片'
-                f'发到群里，之后正常给文字回答')
+            return False, '图片下载到了，但发到微信群失败了，请改用文字描述'
+        return True, (f'已把 ChatGPT 生成的 {len(sent)}/{len(files)} 张图片'
+                      f'发到群里，之后正常给文字回答')
 
     def think(self, chat_id: str, question: str, recent: str = '',
               who: str = '', chat=None) -> tuple:
