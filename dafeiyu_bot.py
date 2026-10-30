@@ -584,8 +584,10 @@ class DaFeiYuBot:
                     f'（检查 Chrome 的 OpenCLI 扩展和 chatgpt.com 登录态）')
         try:
             rows = json.loads(proc.stdout)
+            if isinstance(rows, dict) and isinstance(rows.get('data'), list):
+                rows = rows['data']          # opencli 把行包在 data 字段里
             response = (rows[0]['response'] if isinstance(rows, list)
-                        else rows['response'])
+                        else rows.get('response'))
         except Exception:
             return ('ChatGPT 返回了无法解析的内容：'
                     + (proc.stdout or '')[:200])
@@ -621,7 +623,7 @@ class DaFeiYuBot:
         try:
             proc = subprocess.run(
                 [node, main_js, 'chatgpt', 'image', prompt,
-                 '--out', out_dir, '--format', 'json',
+                 '--op', out_dir, '--format', 'json',
                  '--timeout', str(CHATGPT_TIMEOUT)],
                 capture_output=True, text=True, encoding='utf-8',
                 errors='replace', timeout=CHATGPT_TIMEOUT + 90)
@@ -634,6 +636,8 @@ class DaFeiYuBot:
         files = []
         try:
             rows = json.loads(proc.stdout)
+            if isinstance(rows, dict) and isinstance(rows.get('data'), list):
+                rows = rows['data']
             for row in (rows if isinstance(rows, list) else [rows]):
                 f = (row or {}).get('file') or ''
                 if f and os.path.isfile(f):
