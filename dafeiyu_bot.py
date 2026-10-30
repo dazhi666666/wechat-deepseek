@@ -640,7 +640,13 @@ class DaFeiYuBot:
                 rows = rows['data']
             for row in (rows if isinstance(rows, list) else [rows]):
                 f = (row or {}).get('file') or ''
-                if f and os.path.isfile(f):
+                if not f:
+                    continue
+                # opencli 的输出带 📁/✅ 之类的装饰前缀，剥到盘符开头
+                m = re.search(r'[A-Za-z]:[\\/].*', f)
+                if m:
+                    f = m.group(0)
+                if os.path.isfile(f):
                     files.append(f)
         except Exception:
             pass
