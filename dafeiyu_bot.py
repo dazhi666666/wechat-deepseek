@@ -127,6 +127,7 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - 回复要点名某个人时，把回答写成「@昵称 你的回答」开头（昵称用【】里的名字，不要自己编），系统会把它转成真正的@提醒对方。默认规则：别人正经问你问题、求帮忙、点名说话，回答一律以「@昵称 」开头；只有接着同一话题连续斗嘴、明显不需要指名时才省略。
 - 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述）。闲聊、被逗、表达情绪、气氛到位时发一个很加分；正经技术回答、办事总结不要乱发。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。
 - ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答：只在用户明确点名「问问 ChatGPT」、想对比第二意见时才用，调用有间隔限制，自己能答的别浪费。拿到回答后**原样复述给群里**，不要改写成自己的口吻、不要加人设包裹；最多在开头补一句「ChatGPT 的回答：」。
+- 遇到稍有难度的活——查实时资料/新闻/行情、写个 HTML/代码、做复杂分析比较——都可以转给 ask_chatgpt 让 ChatGPT 干：要联网信息的带 web_search=true；产出是代码/HTML 就原样贴出来。别硬撑着自己编。
 - chatgpt_image 工具能让 ChatGPT 画图并把图片转发到群里：只在用户明确要求「画/生成图片」时用；画图要等几分钟，用了就告诉大家「正在画，稍等」。"""
 
 FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
@@ -138,14 +139,18 @@ CHATGPT_TOOL = {
         'name': 'ask_chatgpt',
         'description': (
             '把问题转交给 ChatGPT 并拿回它的回答（经你的 ChatGPT 网页'
-            '会话，最多等 90 秒）。只在用户明确点名要用 ChatGPT、想对比'
-            '第二意见、或自己没把握时使用；每天有次数上限，自己能答的'
-            '别浪费额度。prompt 要写成完整、自包含的问题。'),
+            '会话，最多等 240 秒）。两种用法：普通提问直接问；需要实时'
+            '信息（今日新闻、最新行情、软件最新版本、比赛比分等联网内容）'
+            '时把 web_search 设为 true，ChatGPT 会联网查。只在用户明确'
+            '点名要用 ChatGPT、要查实时资料、想对比第二意见时使用；自己'
+            '能答的别浪费。prompt 要写成完整、自包含的问题。'),
         'parameters': {
             'type': 'object',
             'properties': {
                 'prompt': {'type': 'string',
                            'description': '转给 ChatGPT 的完整问题'},
+                'web_search': {'type': 'boolean',
+                               'description': '需要联网查实时信息时设为 true'},
             },
             'required': ['prompt'],
         },
@@ -552,7 +557,7 @@ class DaFeiYuBot:
             self._opencli = (node, main_js)
         return self._opencli
 
-    def _ask_chatgpt(self, prompt: str) -> str:
+    def _ask_chatgpt(self, prompt: str, web_search: bool = False) -> str:
         """转问题给 ChatGPT，返回给模型的工具结果文本。
 
         限流：冷却间隔。失败（没装桥/扩展没连/没登录/超时）只把原因回给
@@ -569,13 +574,15 @@ class DaFeiYuBot:
         if not node or not main_js:
             return 'ChatGPT 桥不可用：本机没找到 opencli 运行时'
         self._cgpt_last = now
-        print('[ChatGPT] 转问…', flush=True)
+        print(f'[ChatGPT] 转问{"（联网）" if web_search else ""}…', flush=True)
         t0 = time.time()
+        cmd = [node, main_js, 'chatgpt', 'ask', prompt,
+               '--format', 'json', '--timeout', str(CHATGPT_TIMEOUT)]
+        if web_search:
+            cmd.append('--web-search')
         try:
             proc = subprocess.run(
-                [node, main_js, 'chatgpt', 'ask', prompt,
-                 '--format', 'json', '--timeout', str(CHATGPT_TIMEOUT)],
-                capture_output=True, text=True, encoding='utf-8',
+                cmd, capture_output=True, text=True, encoding='utf-8',
                 errors='replace', timeout=CHATGPT_TIMEOUT + 60)
         except subprocess.TimeoutExpired:
             return 'ChatGPT 超时没有给出回答'
@@ -747,7 +754,8 @@ class DaFeiYuBot:
                     if result.startswith('已发送'):
                         media_sent = True
                 elif name == 'ask_chatgpt':
-                    result = self._ask_chatgpt(args.get('prompt') or '')
+                    result = self._ask_chatgpt(args.get('prompt') or '',
+                                               bool(args.get('web_search')))
                 elif name == 'chatgpt_image':
                     result = self._chatgpt_image(args.get('prompt') or '', chat)
                     if result.startswith('已把'):
