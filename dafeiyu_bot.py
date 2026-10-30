@@ -125,9 +125,10 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
 - **每次回答一律以「@昵称 」开头**（昵称用【】里的名字，不要自己编），系统会转成真正的@提醒对方。这是硬规则，没有例外；@不到（如对方已退群）就从【】里原样写名字。
 - 你有 send_sticker 工具可以发表情包/图片（可用列表见工具描述）。闲聊、被逗、表达情绪、气氛到位时发一个很加分；正经技术回答、办事总结不要乱发。发完工具会告诉你结果，之后正常给文字回答；只发表情不说话也行（结尾给空回答）。
-- ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答：只在用户明确点名「问问 ChatGPT」、想对比第二意见时才用，调用有间隔限制，自己能答的别浪费。拿到回答后**原样复述给群里**，不要改写成自己的口吻、不要加人设包裹；最多在开头补一句「ChatGPT 的回答：」。
-- 遇到稍有难度的活——查实时资料/新闻/行情、写个 HTML/代码、做复杂分析比较——都可以转给 ask_chatgpt 让 ChatGPT 干：要联网信息的带 web_search=true；产出是代码/HTML 就原样贴出来。别硬撑着自己编。
-- chatgpt_image 工具能让 ChatGPT 画图并把图片转发到群里：只在用户明确要求「画/生成图片」时用；画图要等几分钟，用了就告诉大家「正在画，稍等」。"""
+- ask_chatgpt 工具可以把问题转给 ChatGPT 拿回答（调用有间隔限制，自己能答的别浪费）。拿到回答后**原样复述给群里**，不要改写成自己的口吻、不要加人设包裹；最多在开头补一句「ChatGPT 的回答：」。
+- 遇到稍有难度的活——查实时资料/新闻/行情、写个 HTML/代码、做复杂分析比较——都可以转给 ask_chatgpt 让 ChatGPT 干：要联网信息的带 web_search=true。别硬撑着自己编。
+- 群友要「网页/动画/图表/文档/小工具」这类成品（比如画个鹈鹕骑自行车的 HTML 动画）时，这是让 ChatGPT 生成**文件**，不是生图：转给 ChatGPT 的 prompt 里必须明确要求它直接生成文件（例：「请用代码生成一个完整的 xxx.html 文件并保存」），不要只让它在回答里贴代码——生成的文件会被自动下载并转发到群里，群里直接拿到能用的成品。只有用户明确想要一张图片（照片、插画、表情图）才用 chatgpt_image。
+- say_to_group 工具能在运行过程中随时往群里发一条消息：转活给 ChatGPT（ask_chatgpt / chatgpt_image）**之前**先 say 一句（如「我让 ChatGPT 帮忙干了，稍等」）；干完、文件已转发后，正式回答里说「我已经让 ChatGPT 帮我干了」并简短交代结果。除此之外别滥用（闲聊能一句话答的直接答）。"""
 
 FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
 
@@ -138,11 +139,12 @@ CHATGPT_TOOL = {
         'name': 'ask_chatgpt',
         'description': (
             '把问题转交给 ChatGPT 并拿回它的回答（经你的 ChatGPT 网页'
-            '会话，最多等 240 秒）。两种用法：普通提问直接问；需要实时'
-            '信息（今日新闻、最新行情、软件最新版本、比赛比分等联网内容）'
-            '时把 web_search 设为 true，ChatGPT 会联网查。只在用户明确'
-            '点名要用 ChatGPT、要查实时资料、想对比第二意见时使用；自己'
-            '能答的别浪费。prompt 要写成完整、自包含的问题。'),
+            '会话，最多等 240 秒）。用法：普通提问直接问；需要实时信息'
+            '（今日新闻、最新行情、软件最新版本、比赛比分等联网内容）时'
+            '把 web_search 设为 true；要「成品」（HTML 网页/动画、图表、'
+            'CSV、PDF、文档等）时在 prompt 里明确要求 ChatGPT 直接生成'
+            '文件，它生成的文件会自动下载并转发到群里。prompt 要写成'
+            '完整、自包含的问题。'),
         'parameters': {
             'type': 'object',
             'properties': {
@@ -172,6 +174,27 @@ CHATGPT_IMAGE_TOOL = {
                            'description': '给 ChatGPT 的画图描述'},
             },
             'required': ['prompt'],
+        },
+    },
+}
+
+# 群内发消息工具：运行过程中随时同步进度（转 ChatGPT 前先说一声等）
+SAY_TOOL = {
+    'type': 'function',
+    'function': {
+        'name': 'say_to_group',
+        'description': (
+            '在干活过程中随时往群里发一条消息，不影响你最后的正式回答。'
+            '典型用法：把活转给 ChatGPT 之前先说一句（如「我让 ChatGPT '
+            '帮忙干了，稍等」）；干完、文件已转发后，正式回答里再说结果。'
+            '闲聊能一句话答的场景不要调用。发的也是微信纯文本，禁 Markdown。'),
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'text': {'type': 'string',
+                         'description': '要发到群里的消息内容'},
+            },
+            'required': ['text'],
         },
     },
 }
@@ -771,6 +794,26 @@ class DaFeiYuBot:
         return True, (f'已把 ChatGPT 生成的 {len(sent)}/{len(files)} 张图片'
                       f'发到群里，之后正常给文字回答')
 
+    def _say_to_group(self, text: str, chat) -> str:
+        """运行中把一条进度消息直接发到群里（say_to_group 工具实现）。
+
+        失败只把原因回给模型，不在这里暂停：暂停判定归正式回答那一路。
+        """
+        text = (text or '').strip()
+        if not text:
+            return '错误：text 不能为空'
+        if chat is None:
+            return '当前模式发不了消息'
+        try:
+            with self.send_lock:
+                r = chat.SendMsg(text)
+        except Exception as e:
+            print(f'[say] 发送异常：{type(e).__name__}: {e}', flush=True)
+            return f'发送失败：{type(e).__name__}: {e}'
+        ok = r is None or (hasattr(r, 'is_success') and r.is_success)
+        print(f'[say] {text[:50]!r} -> {"成功" if ok else r}', flush=True)
+        return '已发送' if ok else f'发送失败：{r}'
+
     def think(self, chat_id: str, question: str, recent: str = '',
               who: str = '', chat=None) -> tuple:
         """带群上下文跑一轮 agent 循环，返回 (回答, 要@的昵称或 None)。
@@ -814,7 +857,7 @@ class DaFeiYuBot:
             try:
                 m = self.llm.chat_raw(
                     msgs, tools=[SEARCH_TOOL, CHATGPT_TOOL, CHATGPT_IMAGE_TOOL,
-                                 self._sticker_tool()])
+                                 SAY_TOOL, self._sticker_tool()])
             except Exception as e:
                 print(f'[agent] 工具请求失败（{e}），降级为无工具直答',
                       flush=True)
@@ -838,7 +881,9 @@ class DaFeiYuBot:
                 except Exception:
                     args = {}
                 name = fn.get('name') or ''
-                if name == 'send_sticker':
+                if name == 'say_to_group':
+                    result = self._say_to_group(args.get('text') or '', chat)
+                elif name == 'send_sticker':
                     result = self._send_sticker(args.get('name') or '', chat)
                     if result.startswith('已发送'):
                         media_sent = True
