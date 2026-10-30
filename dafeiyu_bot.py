@@ -664,7 +664,8 @@ class DaFeiYuBot:
         print(f'[ChatGPT] 转问{"（联网）" if web_search else ""}…', flush=True)
         t0 = time.time()
         cmd = [node, main_js, 'chatgpt', 'ask', prompt,
-               '--format', 'json', '--timeout', str(CHATGPT_TIMEOUT)]
+               '--format', 'json', '--timeout', str(CHATGPT_TIMEOUT),
+               '--new']          # 每次尝试（含重试）都开全新会话，不接续旧对话
         if web_search:
             cmd.append('--web-search')
         try:
@@ -741,6 +742,14 @@ class DaFeiYuBot:
         out_dir = os.path.join(CHATGPT_IMAGES_DIR,
                                time.strftime('%Y%m%d_%H%M%S'))
         os.makedirs(out_dir, exist_ok=True)
+        # image 适配器没有 --new，先开一个全新会话再画（重试时同样生效）
+        try:
+            subprocess.run(
+                [node, main_js, 'chatgpt', 'new'],
+                capture_output=True, text=True, encoding='utf-8',
+                errors='replace', timeout=90)
+        except Exception as e:
+            print(f'[ChatGPT] 新建会话失败（沿用当前会话画）：{e}', flush=True)
         print('[ChatGPT] 生图…', flush=True)
         t0 = time.time()
         try:
