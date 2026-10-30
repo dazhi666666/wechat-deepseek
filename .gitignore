@@ -16,9 +16,7 @@ wechatauto_logs/
 *.decrypted.db
 .keys.json
 
-# 表情包是用户自己的媒体文件，不入库
-stickers/*
-!stickers/README.md
+# 表情包随仓库一起入库（2026-10-30 用户确认）
 
 # 编辑器
 .idea/
