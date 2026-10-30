@@ -10,7 +10,7 @@ RECENT_N 条群消息当上下文，没聊过天也能接得上话。只认 @ �
 没被 @ 的消息只进围观记录，不回答。
 
 内置 agent 工具循环：LLM 可调用 search_group_messages 搜索最近
-SEARCH_DAYS 天的群聊消息（关键词/成员/群名，为空=全部，上限 2000 条）。
+SEARCH_DAYS 天的群聊消息（关键词/成员/群名，为空=全部，上限 3000 条）。
 
 用法：
     python dafeiyu_bot.py            # 启动机器人，Ctrl+C 退出
@@ -60,11 +60,11 @@ RECENT_LINE_MAX = 200       # 群消息日志里单条消息截断长度，防�
 
 # -- 群消息搜索工具（LLM 可调用，也可 --search 命令行直用）----------------
 SEARCH_DAYS = 3             # 搜索窗口：最近几天
-SEARCH_MAX_RESULTS = 2000   # 返回上限：最多多少条（超出保留最新的）
-SEARCH_RESULT_MAX_CHARS = 60_000   # 塞给模型的结果长度上限（防撑爆上下文）
+SEARCH_MAX_RESULTS = 3000   # 返回上限：最多多少条（超出保留最新的）
+SEARCH_RESULT_MAX_CHARS = 90_000   # 塞给模型的结果长度上限（防撑爆上下文）
 SEARCH_PAGE = 500           # 每个群分页拉取的步长
 SEARCH_ROOM_LIMIT = 300     # 最多扫多少个群（按会话列表取前 N）
-SEARCH_ROOM_PAGE_CAP = 20000   # 每个群最多回溯多少条
+SEARCH_ROOM_PAGE_CAP = 50000   # 每个群最多回溯多少条
 TOOL_ROUNDS = 4             # 单次回答允许的工具调用轮数
 
 # -- 日志 ----------------------------------------------------------------
@@ -123,7 +123,7 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 
 ## 工具
 - 消息开头的「【昵称】」标记表示这句话是谁发的。
-- 你可以调用 search_group_messages 工具：搜索【当前这个群】最近 3 天的消息。参数 keyword（按消息内容）、member（按发送者昵称/备注/wxid）都可选，都不填=返回本群全部（最多 2000 条）。只能搜本群，别的群搜不到。
+- 你可以调用 search_group_messages 工具：搜索【当前这个群】最近 3 天的消息。参数 keyword（按消息内容）、member（按发送者昵称/备注/wxid）都可选，都不填=返回本群全部（最多 3000 条）。只能搜本群，别的群搜不到。
 - 被问「群里之前聊了什么 / 谁提过 X / 某人发过什么」这类问题时，先调工具搜证据再回答，别凭印象编；引用时带上时间。没搜到就直说没搜到。
 - 总结类问题（比如「总结一下群消息」）只总结本群的，绝不要把别的群的内容扯进来。
 - get_ai_news 工具能查 AI 圈实时资讯：action=hot 当前热点榜 Top10 / latest 最近 24 小时精选动态（可带 keyword、category 过滤） / daily 今日日报。被问「最近 AI 有什么新闻/热点/大事件」时先调它拿真数据再回答，别凭印象编。
@@ -137,6 +137,42 @@ SYSTEM_PROMPT = """你是「大肥鱼」，一只 DeepSeek V4 二创的蓝色鲸
 - say_to_group 工具能在运行过程中随时往群里发一条消息（进度同步、长任务的中间反馈），闲聊能一句话答的别用；发的也是微信纯文本，禁 Markdown。"""
 
 FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
+
+# -- 管理页覆盖配置 ------------------------------------------------------
+# 管理后台（python -m admin）把配置写进同目录 bot_config.json，启动时覆盖
+# 上面的同名常量；文件里没有的键保持原值。含内网地址/密钥，已 gitignore。
+BOT_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'bot_config.json')
+_OVERRIDABLE = {
+    'API_HOSTS': list, 'API_PORT': int, 'API_KEY': str, 'MODEL': str,
+    'AT_NAME': str, 'RECENT_N': int, 'MAX_TOKENS': int, 'LLM_TIMEOUT': int,
+    'TOOL_ROUNDS': int, 'SEARCH_DAYS': int, 'CONTEXT_TOKEN_LIMIT': int,
+    'CHATGPT_COOLDOWN': int, 'CHATGPT_TIMEOUT': int, 'SEND_RETRIES': int,
+    'SYSTEM_PROMPT': str, 'FAIL_REPLY': str,
+}
+
+
+def _apply_config_overrides() -> None:
+    try:
+        with open(BOT_CONFIG_FILE, encoding='utf-8') as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception as e:
+        print(f'[配置] {BOT_CONFIG_FILE} 读取失败，忽略：{e}', flush=True)
+        return
+    for key, typ in _OVERRIDABLE.items():
+        val = cfg.get(key)
+        if val in (None, '', []):
+            continue
+        try:
+            globals()[key] = ([str(h).strip() for h in val if str(h).strip()]
+                              if typ is list else typ(val))
+        except (TypeError, ValueError):
+            print(f'[配置] {key}={val!r} 类型不对，忽略', flush=True)
+
+
+_apply_config_overrides()
 
 # ChatGPT 工具：只暴露 ask（转问题拿回答），范围收敛在提示词+限流双层
 CHATGPT_TOOL = {
@@ -215,7 +251,7 @@ SEARCH_TOOL = {
         'description': (
             '搜索当前会话（本群）最近3天的消息。keyword=按消息内容搜，'
             'member=按发送者昵称/备注/wxid搜；都不填=返回本群全部消息。'
-            '最多返回2000条（超出保留最新的）。只能搜本群，搜不了别的群。'
+            '最多返回3000条（超出保留最新的）。只能搜本群，搜不了别的群。'
             '只在需要查本群历史时调用。'),
         'parameters': {
             'type': 'object',
@@ -454,11 +490,18 @@ class DaFeiYuBot:
         else:
             text = f'[{msg.type}]'          # 图片/文件等只留类型占位
         if text:
-            buf.append((getattr(msg, 'sender', '') or '有人', text[:RECENT_LINE_MAX]))
+            ts = getattr(msg, 'create_time', None) or time.time()
+            buf.append((ts, getattr(msg, 'sender', '') or '有人',
+                        text[:RECENT_LINE_MAX]))
 
     def _recent_log(self, chat_id: str) -> str:
-        """最近群消息日志（不含最后一条 = 当前触发消息），没有返回空串。"""
-        lines = [f'{who}: {text}' for who, text in self.recent.get(chat_id, ())][:-1]
+        """最近群消息日志（不含最后一条 = 当前触发消息），没有返回空串。
+
+        每条带时间戳和昵称，模型引用群消息时能报出「谁、什么时候说的」。
+        """
+        lines = ['[%s] %s: %s' % (time.strftime('%m-%d %H:%M',
+                                                 time.localtime(ts)), who, text)
+                 for ts, who, text in self.recent.get(chat_id, ())][:-1]
         if not lines:
             return ''
         return ('【本群最近聊天记录（供参考，不一定与问题相关）】\n'
