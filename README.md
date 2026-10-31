@@ -8,7 +8,7 @@
 **微信群聊 AI 机器人**，加上一套微信 4.x Windows 客户端自动化库
 （基于 [wechatauto-replica](https://github.com/fanyuantaier/wechatauto-replica) 二次开发，Apache-2.0）。
 
-## 🐳 大肥鱼：微信群 AI 机器人
+## 🐳 大肥鱼：微信群 AI 机器人 （采用Agent架构）
 
 `dafeiyu_bot.py` 监听所有会话，别人在群里 @ 它就把问题发给你自建的 LLM，
 回答直接发回群里。
