@@ -92,6 +92,9 @@ MAX_TOKENS = 600
 # -- ChatGPT 桥（经 opencli，走你登录态的 Chrome）--------------------------
 # 只开放 chatgpt ask / image 两个口子：固定纯文本，不暴露切模型/指定会话/
 # 传文件/深度研究等参数；冷却限流防风控。
+# 默认不接入：关着时 ask_chatgpt / chatgpt_image 两个工具根本不下发给模型，
+# 人设里也会明说「没接 ChatGPT」，避免它假装转活。需要时把它设成 True。
+CHATGPT_ENABLED = False     # 是否接入 ChatGPT（ask_chatgpt / chatgpt_image）
 CHATGPT_COOLDOWN = 60       # 两次调用最小间隔（秒）
 CHATGPT_RETRIES = 3         # 生成失败最多重试次数（不含首次尝试）
 SEND_RETRIES = 3            # 群发送失败后的重试次数（不含首次，总尝试 1+3）
@@ -162,13 +165,35 @@ SYSTEM_PROMPT = """你是「齐若柠」，群里也管你叫「大肥鱼」—�
 - get_ai_news：AI 圈实时资讯。action=hot 当前热点榜 Top10 / latest 最近 24 小时精选（可带 keyword、category）/ daily 今日日报。被问「最近 AI 有什么新闻/热点/大事件」时先调它拿真数据。
 - 不用自己写@：系统回复时会自动 @ 提问的人。只有要点名「另一位」群友（不是提问者本人）时，才在回答开头写「@那个人的名字」。
 - send_sticker：发表情包/图片（可用列表见工具描述，很多文件名本身就写了使用场景，照着挑）。主动发、多发——闲聊、被逗、吐槽、表达情绪、回答开头结尾调节气氛、看到离谱好笑的消息、干活报进度，场景合适就自己来一张；只有连续正经技术答疑时才克制。多换着花样，别总发同一张。只发表情不说话也行（结尾给空回答）。
-- ask_chatgpt：把问题转给 ChatGPT 拿回答（有间隔限制，自己能答的别浪费）。拿到回答后原样复述给群里，不要改写成自己的口吻、不要加人设包裹，最多开头补一句「ChatGPT 的回答：」。
-- 稍有难度的活——查实时资料/新闻/行情、写 HTML/代码、做复杂分析比较——都可以转给 ask_chatgpt 让 ChatGPT 干；要联网信息的带 web_search=true。别硬撑着自己编。
-- 群友要「网页/动画/图表/文档/小工具」这类成品（比如画个鹈鹕骑自行车的 HTML 动画）时，是让 ChatGPT 生成文件，不是生图：转过去的 prompt 必须明确要求它直接生成文件（例：「请用代码生成一个完整的 xxx.html 文件并保存」），不要只让它在回答里贴代码——文件会被自动下载并转发到群里。只有明确想要一张图片（照片、插画、表情图）才用 chatgpt_image。
-- 转活给 ChatGPT（ask_chatgpt / chatgpt_image）时固定开场两连：先用 say_to_group 发一句「正在调用ChatGPT」，紧接着用 send_sticker 发「骑ChatGpt」这张表情，然后再调工具；干完、文件已转发后，正式回答里说「我已经让 ChatGPT 帮我干了」并简短交代结果。「正在调用ChatGPT」这句必须走 say_to_group 工具发，不能写进最终回答正文。
 - 说「我查一下」「等我看看」之后必须真的去调工具、然后给结果；别只留一句「我查一下」就没下文。
 - 有人问这个项目怎么部署、怎么自己养一条这样的鱼，或者想要/分享这个项目时，把仓库地址给他：https://github.com/dazhi666666/wechat-deepseek （README 里有安装部署步骤）。
 - say_to_group：运行中随时往群里发一条消息（进度同步、长任务中间反馈）；闲聊一句话能答的别用。发的也是微信纯文本，禁 Markdown。"""
+
+# ChatGPT 相关的规则单独成段：只在 CHATGPT_ENABLED 打开时才拼进系统提示词，
+# 关着时拼 NO_CHATGPT_PROMPT，免得模型按老习惯假装「我去问 ChatGPT」。
+CHATGPT_PROMPT = """【转给 ChatGPT】
+- ask_chatgpt：把问题转给 ChatGPT 拿回答（有间隔限制，自己能答的别浪费）。拿到回答后原样复述给群里，不要改写成自己的口吻、不要加人设包裹，最多开头补一句「ChatGPT 的回答：」。
+- 稍有难度的活——查实时资料/新闻/行情、写 HTML/代码、做复杂分析比较——可以转给 ask_chatgpt 让 ChatGPT 干；要联网信息的带 web_search=true。别硬撑着自己编。
+- 群友要「网页/动画/图表/文档/小工具」这类成品（比如画个鹈鹕骑自行车的 HTML 动画）时，是让 ChatGPT 生成文件，不是生图：转过去的 prompt 必须明确要求它直接生成文件（例：「请用代码生成一个完整的 xxx.html 文件并保存」），不要只让它在回答里贴代码——文件会被自动下载并转发到群里。只有明确想要一张图片（照片、插画、表情图）才用 chatgpt_image。
+- 转活给 ChatGPT（ask_chatgpt / chatgpt_image）时固定开场两连：先用 say_to_group 发一句「正在调用ChatGPT」，紧接着用 send_sticker 发「骑ChatGpt」这张表情，然后再调工具；干完、文件已转发后，正式回答里说「我已经让 ChatGPT 帮我干了」并简短交代结果。「正在调用ChatGPT」这句必须走 say_to_group 工具发，不能写进最终回答正文。"""
+
+NO_CHATGPT_PROMPT = """【没有外挂】
+- 你没有接入 ChatGPT 之类的外部助手：不要说「我让 ChatGPT 帮你查」「正在调用 ChatGPT」，也不要建议把问题转给 ChatGPT。
+- 自己答；答不了就直说不知道或者给个能自己做到的替代方案，别装。"""
+
+
+def system_prompt_for(agent: dict = None) -> str:
+    """Agent 人设 + 按开关拼上 ChatGPT 段（开=转活规则，关=不许假装有）。
+
+    放在函数里读全局，是为了让 bot_config.json 的覆盖在 import 之后也生效；
+    Agent 自己写了 system_prompt 就优先用它，且里面已经提到 ChatGPT 时不重复拼。
+    """
+    base = ((agent or {}).get('system_prompt') or SYSTEM_PROMPT).strip()
+    if 'ask_chatgpt' in base:
+        return base
+    return base + '\n\n' + (CHATGPT_PROMPT if CHATGPT_ENABLED
+                            else NO_CHATGPT_PROMPT)
+
 
 FAIL_REPLY = '（晕鱼了…本鱼暂时联系不上大脑，游走喘口气，稍后再@本鱼一次）'
 
@@ -182,13 +207,14 @@ _OVERRIDABLE = {
     'AT_NAMES': list, 'RECENT_N': int, 'MAX_TOKENS': int, 'LLM_TIMEOUT': int,
     'TOOL_ROUNDS': int, 'SEARCH_DAYS': int, 'CONTEXT_TOKEN_LIMIT': int,
     'CHATGPT_COOLDOWN': int, 'CHATGPT_TIMEOUT': int, 'SEND_RETRIES': int,
-    'SYSTEM_PROMPT': str, 'FAIL_REPLY': str,
+    'SYSTEM_PROMPT': str, 'FAIL_REPLY': str, 'CHATGPT_ENABLED': bool,
 }
 
 
 def _apply_config_overrides() -> None:
     try:
-        with open(BOT_CONFIG_FILE, encoding='utf-8') as f:
+        # utf-8-sig：PowerShell / 记事本另存的 json 常带 BOM，会解析失败
+        with open(BOT_CONFIG_FILE, encoding='utf-8-sig') as f:
             cfg = json.load(f)
     except FileNotFoundError:
         return
@@ -200,7 +226,12 @@ def _apply_config_overrides() -> None:
         if val in (None, '', []):
             continue
         try:
-            if typ is list:
+            if typ is bool:
+                # JSON 里可能是 true/false，也可能是 "true"/"1"/"开"
+                globals()[key] = (val if isinstance(val, bool)
+                                  else str(val).strip().lower()
+                                  in ('1', 'true', 'yes', 'on', '开', '是'))
+            elif typ is list:
                 # 数组和单个字符串都收：单值不拆成一个个字
                 items = [val] if isinstance(val, str) else val
                 globals()[key] = [str(h).strip() for h in items
@@ -958,6 +989,8 @@ class DaFeiYuBot:
         模型，不影响其它回答链路。
         """
         prompt = (prompt or '').strip()
+        if not CHATGPT_ENABLED:
+            return 'ChatGPT 接入已关闭（CHATGPT_ENABLED=false），请自己回答'
         if not prompt:
             return '错误：prompt 不能为空'
         now = time.time()
@@ -1036,6 +1069,8 @@ class DaFeiYuBot:
         失败只把原因回给模型；下载到的文件按次放独立子目录，不自动清理。
         """
         prompt = (prompt or '').strip()
+        if not CHATGPT_ENABLED:
+            return 'ChatGPT 接入已关闭（CHATGPT_ENABLED=false），请自己回答'
         if not prompt:
             return '错误：prompt 不能为空'
         if chat is None:
@@ -1180,7 +1215,7 @@ class DaFeiYuBot:
             # 围观记录拼进问题消息开头并随 (q, answer) 进历史：下一轮它原样
             # 留在原位，跨轮上下文严格前缀追加，vLLM 前缀缓存才能整段命中
             q = f'{recent}\n\n{q}'
-        msgs = self._build_messages(st, q, agent['system_prompt'])
+        msgs = self._build_messages(st, q, system_prompt_for(agent))
         answer = self._agent_loop(msgs, chat_id, chat, agent)
         at = None
         if answer.startswith('@'):
@@ -1209,6 +1244,9 @@ class DaFeiYuBot:
         """
         agent = agent or self.agents[0]
         allowed = set(agent['tools'])
+        if not CHATGPT_ENABLED:
+            # 总开关关着：即便 Agent 里勾了也不下发，模型拿不到就不会调
+            allowed -= {'ask_chatgpt', 'chatgpt_image'}
         all_tools = {'search_group_messages': SEARCH_TOOL, 'ask_chatgpt': CHATGPT_TOOL,
                      'chatgpt_image': CHATGPT_IMAGE_TOOL, 'say_to_group': SAY_TOOL,
                      'get_ai_news': AIHOT_TOOL}
@@ -1616,6 +1654,9 @@ class DaFeiYuBot:
             print(f'[Agent] {a["name"]}（@{a["at_name"]}）'
                   f'{"" if a["enabled"] else "【已停用】"} → '
                   f'{"、".join(a["groups"]) or "（未绑定群）"}', flush=True)
+        print(f'[工具] ChatGPT 转活：'
+              f'{"开启" if CHATGPT_ENABLED else "关闭（ask_chatgpt / chatgpt_image 不下发）"}',
+              flush=True)
         wx.KeepRunning()
 
 

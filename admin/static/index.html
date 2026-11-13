@@ -644,6 +644,10 @@ dialog.dlg::backdrop { background: rgba(7,13,26,.5); backdrop-filter: blur(3px);
           <label class="f"><span>搜索天数 SEARCH_DAYS</span><input class="input" type="number" data-k="SEARCH_DAYS"></label>
           <label class="f"><span>记忆压缩阈值（token）</span><input class="input" type="number" data-k="CONTEXT_TOKEN_LIMIT"></label>
           <label class="f"><span>发送重试次数</span><input class="input" type="number" data-k="SEND_RETRIES"></label>
+          <label class="f"><span>接入 ChatGPT</span>
+            <span style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="checkbox" data-k="CHATGPT_ENABLED">启用 ask_chatgpt / chatgpt_image</span>
+            <em>默认关闭。关着时这两个工具不下发给模型，人设里也会说明没有外挂</em>
+          </label>
           <label class="f"><span>ChatGPT 冷却（秒）</span><input class="input" type="number" data-k="CHATGPT_COOLDOWN"></label>
           <label class="f"><span>ChatGPT 超时（秒）</span><input class="input" type="number" data-k="CHATGPT_TIMEOUT"></label>
         </div>
@@ -1006,6 +1010,7 @@ $('#hostIn').onkeydown = e => {
 };
 $('#hosts').onclick = () => $('#hostIn').focus();
 $$('#page-config [data-k]').forEach(el => el.addEventListener('input', () => { markDirty(); if (el.dataset.k === 'SYSTEM_PROMPT') promptStat(); }));
+$$('#page-config input[type=checkbox][data-k]').forEach(el => el.addEventListener('change', () => markDirty()));
 function promptStat() {
   const t = $('[data-k=SYSTEM_PROMPT]').value, cjk = (t.match(/[一-鿿]/g) || []).length;
   $('#promptStat').textContent = `${t.length} 字 · 约 ${cjk + Math.floor((t.length - cjk) / 3)} tokens`;
@@ -1013,7 +1018,10 @@ function promptStat() {
 async function loadConfig() {
   try {
     const r = await api('/api/config'); cfg = r.config; hosts = [...(cfg.API_HOSTS || [])];
-    $$('#page-config [data-k]').forEach(el => el.value = cfg[el.dataset.k] ?? '');
+    $$('#page-config [data-k]').forEach(el => {
+      if (el.type === 'checkbox') el.checked = !!cfg[el.dataset.k];
+      else el.value = cfg[el.dataset.k] ?? '';
+    });
     renderHosts(); promptStat(); markDirty(false);
     $('#bn-model').textContent = '模型 ' + cfg.MODEL; $('#bn-nodes').textContent = hosts.length + ' 个节点'; $('#bn-at').textContent = '@' + (cfg.AT_NAMES || []).join('、');
     if (!r.file_exists) $('#saveMsg').textContent = '当前显示的是脚本默认值 + start_bot.cmd 环境变量，保存后生成 bot_config.json';
@@ -1024,7 +1032,7 @@ async function saveConfig(restart) {
   if (pending) { hosts.push(...pending.split(/[,\s]+/).filter(Boolean)); $('#hostIn').value = ''; renderHosts(); }
   if (!hosts.length) return toast('至少需要一个 LLM 节点', 'bad');
   const body = { API_HOSTS: hosts };
-  $$('#page-config [data-k]').forEach(el => body[el.dataset.k] = el.value);
+  $$('#page-config [data-k]').forEach(el => body[el.dataset.k] = el.type === 'checkbox' ? el.checked : el.value);
   try {
     await api('/api/config', body); markDirty(false); toast('配置已保存', 'ok');
     if (restart) {
@@ -1144,7 +1152,11 @@ function editAgent(i) {
   $('#f-fallback').checked = a.groups.includes('*');
   dlgGroups = [...a.groups];
   $('#chatList').innerHTML = chats.map(c => `<option value="${esc(c.name)}">${esc(c.id)}</option>`).join('');
-  $('#f-tools').innerHTML = agentTools.map(t => `<label class="tool-opt"><input type="checkbox" value="${t}" ${a.tools.includes(t) ? 'checked' : ''}><span>${AG_TOOLS[t]?.[0] || t}<small>${AG_TOOLS[t]?.[1] || ''}</small></span></label>`).join('');
+  const cgOff = !(cfg && cfg.CHATGPT_ENABLED);
+  $('#f-tools').innerHTML = agentTools.map(t => {
+    const off = cgOff && (t === 'ask_chatgpt' || t === 'chatgpt_image');
+    return `<label class="tool-opt"${off ? ' style="opacity:.45"' : ''}><input type="checkbox" value="${t}" ${a.tools.includes(t) ? 'checked' : ''} ${off ? 'disabled' : ''}><span>${AG_TOOLS[t]?.[0] || t}<small>${AG_TOOLS[t]?.[1] || ''}${off ? ' · 总开关已关' : ''}</small></span></label>`;
+  }).join('');
   renderDlgGroups();
   $('#agentDlg').showModal();
 }
