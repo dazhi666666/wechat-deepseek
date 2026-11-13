@@ -40,7 +40,7 @@ STICKER_DIR = os.path.join(ROOT, 'stickers')
 STICKER_EXTS = ('.gif', '.jpg', '.jpeg', '.png', '.webp', '.bmp')
 
 # 管理页可编辑的配置项：键名与 dafeiyu_bot._OVERRIDABLE 保持一致
-CONFIG_KEYS = ('API_HOSTS', 'API_PORT', 'API_KEY', 'MODEL', 'AT_NAME',
+CONFIG_KEYS = ('API_HOSTS', 'API_PORT', 'API_KEY', 'MODEL', 'AT_NAMES',
                'RECENT_N', 'MAX_TOKENS', 'LLM_TIMEOUT', 'TOOL_ROUNDS',
                'SEARCH_DAYS', 'CONTEXT_TOKEN_LIMIT', 'CHATGPT_COOLDOWN',
                'CHATGPT_TIMEOUT', 'SEND_RETRIES', 'SYSTEM_PROMPT', 'FAIL_REPLY')
@@ -118,7 +118,7 @@ def save_config(data: dict) -> dict:
         if k not in data:
             continue
         v = data[k]
-        if k == 'API_HOSTS':
+        if k in ('API_HOSTS', 'AT_NAMES'):
             if isinstance(v, str):
                 v = re.split(r'[,\s]+', v)
             v = [str(h).strip() for h in v if str(h).strip()]
@@ -706,9 +706,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'config': load_config(),
                                    'file_exists': os.path.exists(CONFIG_FILE)})
             if p == '/api/agents':
+                d = load_config()
+                at = (d.get('AT_NAMES') or ['大肥鱼'])[0]
                 return self._json({'agents': load_agents(), 'tools': TOOL_NAMES,
-                                   'defaults': {k: load_config().get(k) for k in
-                                                ('AT_NAME', 'MODEL', 'MAX_TOKENS', 'RECENT_N')}})
+                                   'defaults': {'AT_NAME': at,
+                                                'MODEL': d.get('MODEL'),
+                                                'MAX_TOKENS': d.get('MAX_TOKENS'),
+                                                'RECENT_N': d.get('RECENT_N')}})
             if p == '/api/chats':
                 return self._json(list_chats())
             if p == '/api/usage':

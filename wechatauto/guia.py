@@ -409,6 +409,45 @@ class ScreenOCR:
     def available() -> bool:
         return bool(getattr(WxParam, "ENABLE_OCR", True))
 
+    # OCR 专用 MTA 工作线程（懒创建，进程内唯一），见 _ocr_loop 的说明。
+    _ocr_lock = threading.Lock()
+    _ocr_loop_ref = None
+
+    @classmethod
+    def _ocr_loop(cls):
+        """返回 OCR 专用后台线程里的事件循环。
+
+        为什么不在调用线程里跑：``uiautomation`` / ``comtypes`` 会把调用它的
+        线程 COM 初始化成 **STA**。STA 上的 WinRT 异步回调要靠窗口消息泵送达，
+        而本进程没人泵消息，``recognize_async()`` 的 await 就永远不完成——表现
+        是**每条 OCR 都卡满 8s 超时、返回空列表**（实测：同一张图，导入
+        wechatauto 之前 0.17s 出结果，导入之后 10s 超时）。换到 MTA 线程里跑，
+        WinRT 走线程池回调、不需要泵，实测 0.06s 出结果。
+        """
+        with cls._ocr_lock:
+            if cls._ocr_loop_ref is not None:
+                return cls._ocr_loop_ref
+            ready = threading.Event()
+            holder: Dict[str, object] = {}
+
+            def _worker() -> None:
+                try:
+                    # COINIT_MULTITHREADED = 0x0：MTA 不需要消息泵
+                    ctypes.windll.ole32.CoInitializeEx(None, 0x0)
+                except Exception:
+                    pass
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                holder['loop'] = loop
+                ready.set()
+                loop.run_forever()
+
+            threading.Thread(target=_worker, daemon=True,
+                             name='wechatauto-ocr').start()
+            ready.wait(10)
+            cls._ocr_loop_ref = holder.get('loop')
+            return cls._ocr_loop_ref
+
     @staticmethod
     def recognize(image: Image.Image) -> List[Tuple[str, int, int, int, int]]:
         if not ScreenOCR.available():
@@ -418,6 +457,7 @@ class ScreenOCR:
                 wxlog.info('WxParam.ENABLE_OCR=False：OCR 全部停用，相关功能改走 UIA，'
                            '没有 UIA 等价物的操作会明确失败（不盲点坐标）')
             return []
+        from concurrent.futures import TimeoutError as FutureTimeout
         from winsdk.windows.media.ocr import OcrEngine
         from winsdk.windows.graphics.imaging import BitmapDecoder
         from winsdk.windows.storage import StorageFile
@@ -453,9 +493,15 @@ class ScreenOCR:
                 except OSError:
                     pass
 
+        loop = ScreenOCR._ocr_loop()
+        if loop is None:
+            wxlog.debug('OCR 工作线程没起来，跳过本次识别')
+            return []
+        future = asyncio.run_coroutine_threadsafe(_run(), loop)
         try:
-            return asyncio.run(asyncio.wait_for(_run(), timeout=8))
-        except asyncio.TimeoutError:
+            return future.result(timeout=8)
+        except FutureTimeout:
+            future.cancel()
             wxlog.debug('OCR 识别超时（8s）')
             return []
         except Exception as e:

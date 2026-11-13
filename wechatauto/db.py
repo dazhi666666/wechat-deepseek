@@ -148,6 +148,53 @@ def _pbkdf2(passwd: bytes, salt: bytes, iters: int) -> bytes:
     return hashlib.pbkdf2_hmac("sha512", passwd, salt, iters, dklen=32)
 
 
+def _pb_varint(buf: bytes, i: int) -> Tuple[int, int]:
+    """读一个 protobuf varint，返回 (值, 新偏移)。"""
+    shift = 0
+    val = 0
+    while True:
+        if i >= len(buf):
+            raise ValueError("varint 越界")
+        x = buf[i]
+        i += 1
+        val |= (x & 0x7F) << shift
+        if not x & 0x80:
+            return val, i
+        shift += 7
+        if shift > 63:
+            raise ValueError("varint 过长")
+
+
+def _pb_fields(buf: bytes):
+    """按 protobuf 线格式逐个吐 ``(字段号, wire_type, 值)``。
+
+    bytes 字段给 memoryview 切片对应的 bytes；只支持 varint / 长度定界 / 定长，
+    遇到其它 wire type 直接抛，调用方按「解析不了就当没有」处理。
+    """
+    i = 0
+    n = len(buf)
+    while i < n:
+        key, i = _pb_varint(buf, i)
+        field, wire = key >> 3, key & 7
+        if wire == 0:                       # varint
+            val, i = _pb_varint(buf, i)
+            yield field, wire, val
+        elif wire == 2:                     # length-delimited
+            ln, i = _pb_varint(buf, i)
+            if i + ln > n:
+                raise ValueError("长度越界")
+            yield field, wire, buf[i:i + ln]
+            i += ln
+        elif wire == 5:                     # 32 位
+            yield field, wire, buf[i:i + 4]
+            i += 4
+        elif wire == 1:                     # 64 位
+            yield field, wire, buf[i:i + 8]
+            i += 8
+        else:
+            raise ValueError(f"不支持的 wire type {wire}")
+
+
 def _aes_cbc_decrypt(key: bytes, iv: bytes, data: bytes) -> bytes:
     dec = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
     return dec.update(data) + dec.finalize()
@@ -2529,6 +2576,45 @@ class WeChatDB:
             })
         members.sort(key=lambda x: x["username"])
         return members
+
+    def get_group_aliases(self, chatroom_wxid: str) -> Dict[str, str]:
+        """群成员的「群昵称」映射 ``{wxid: 群昵称}``（只包含设置过的人）。
+
+        微信 4.x 把群昵称存在 ``contact.db`` 的 ``chat_room.ext_buffer`` 里
+        （每个成员一条 protobuf，字段 2 = 群昵称）；``contact`` 表的
+        ``nick_name`` 是通讯录昵称，和群昵称不是一回事。未命名群里别人 @ 你
+        时，微信插进输入框的是**群昵称**（本机实测：账号昵称「齊若柠」在这个
+        群里的群昵称是「1111」），所以靠昵称硬编码触发词是识别不出来的。
+        """
+        conn = self._contact_conn()
+        if not conn:
+            return {}
+        try:
+            row = conn.execute(
+                "SELECT ext_buffer FROM chat_room WHERE username=? LIMIT 1",
+                (chatroom_wxid,),
+            ).fetchone()
+        finally:
+            conn.close()
+        buf = (row["ext_buffer"] if row else None) or b""
+        out: Dict[str, str] = {}
+        try:
+            for field, wire, val in _pb_fields(bytes(buf)):
+                if field != 1 or wire != 2:
+                    continue
+                wxid = alias = ""
+                for f2, w2, v2 in _pb_fields(val):
+                    if w2 != 2:
+                        continue
+                    if f2 == 1:
+                        wxid = v2.decode("utf-8", "ignore")
+                    elif f2 == 2:
+                        alias = v2.decode("utf-8", "ignore")
+                if wxid and alias:
+                    out[wxid] = alias
+        except Exception:
+            return out
+        return out
 
     def get_group_member_watcher(self, chatroom_wxid: str) -> "GroupMemberWatcher":
         """为指定群创建成员变动监测器（见 GroupMemberWatcher）。"""

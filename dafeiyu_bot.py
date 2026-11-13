@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """「大肥鱼」微信群 AI 机器人。
 
-群里有人 @大肥鱼 时，把问题发给自建 LLM（OpenAI 兼容接口），再把回答发回群里。
+群里有人 @大肥鱼（或 @齊若柠 等别名）时，把问题发给自建 LLM（OpenAI 兼容接口），再把回答发回群里。
 基于 wechatauto 的全局消息监听（db.Listener，纯数据库轮询，收消息不需要动窗口），
 只有「回话」那一刻才会驱动微信窗口。每个群有长期记忆：对话无上限累积，
 估算上下文到 CONTEXT_TOKEN_LIMIT（默认 100K token）时自动把最老的历史
@@ -54,7 +54,11 @@ API_PORT = int(os.environ.get('WECHAT_DEEPSEEK_API_PORT', '8000'))
 API_KEY = os.environ.get('WECHAT_DEEPSEEK_API_KEY', 'EMPTY')
 MODEL = os.environ.get('WECHAT_DEEPSEEK_MODEL', 'deepseek-v4')
 
-AT_NAME = '大肥鱼'          # 触发词：消息里包含 "@大肥鱼" 才回答（只认 @）
+# 触发词：消息里 @ 到下面任意一个名字都会回答（只认 @）。Agent 自己的
+# at_name 之外，这些是全局别名；此外每个群还会自动认本账号的群昵称。
+AT_NAMES = ['大肥鱼', '齊若柠']
+# 兼容单值写法（= AT_NAMES[0]）。这里保持字面量：管理页要从源码静态读默认值。
+AT_NAME = '大肥鱼'
 RECENT_N = 20               # 被 @ 回答时附带的「最近群消息」条数
 RECENT_LINE_MAX = 200       # 群消息日志里单条消息截断长度，防长文刷爆上下文
 
@@ -145,7 +149,7 @@ BOT_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                'bot_config.json')
 _OVERRIDABLE = {
     'API_HOSTS': list, 'API_PORT': int, 'API_KEY': str, 'MODEL': str,
-    'AT_NAME': str, 'RECENT_N': int, 'MAX_TOKENS': int, 'LLM_TIMEOUT': int,
+    'AT_NAMES': list, 'RECENT_N': int, 'MAX_TOKENS': int, 'LLM_TIMEOUT': int,
     'TOOL_ROUNDS': int, 'SEARCH_DAYS': int, 'CONTEXT_TOKEN_LIMIT': int,
     'CHATGPT_COOLDOWN': int, 'CHATGPT_TIMEOUT': int, 'SEND_RETRIES': int,
     'SYSTEM_PROMPT': str, 'FAIL_REPLY': str,
@@ -166,10 +170,23 @@ def _apply_config_overrides() -> None:
         if val in (None, '', []):
             continue
         try:
-            globals()[key] = ([str(h).strip() for h in val if str(h).strip()]
-                              if typ is list else typ(val))
+            if typ is list:
+                # 数组和单个字符串都收：单值不拆成一个个字
+                items = [val] if isinstance(val, str) else val
+                globals()[key] = [str(h).strip() for h in items
+                                  if str(h).strip()]
+            else:
+                globals()[key] = typ(val)
         except (TypeError, ValueError):
             print(f'[配置] {key}={val!r} 类型不对，忽略', flush=True)
+    # 触发词兼容：老配置写单个 AT_NAME，新配置写 AT_NAMES 数组。
+    # 老写法不覆盖默认列表，而是并进去，多个名字都还能触发。
+    legacy = cfg.get('AT_NAME')
+    if isinstance(legacy, str) and legacy.strip():
+        name = legacy.strip()
+        if name not in AT_NAMES:
+            globals()['AT_NAMES'] = [name] + list(AT_NAMES)
+    globals()['AT_NAME'] = AT_NAMES[0]
 
 
 _apply_config_overrides()
@@ -526,8 +543,14 @@ class LLMClient:
                    'temperature': temperature, 'max_tokens': max_tokens}
         if tools:
             payload['tools'] = tools
+        # 节点既可以是 host[:port]（按 http://host:API_PORT 拼），也可以直接写
+        # 完整 base URL（如 https://api.deepseek.com），官方 API / 中转站都能用。
+        if host.startswith(('http://', 'https://')):
+            url = f'{host.rstrip("/")}/v1/chat/completions'
+        else:
+            url = f'http://{host}:{API_PORT}/v1/chat/completions'
         req = urllib.request.Request(
-            f'http://{host}:{API_PORT}/v1/chat/completions',
+            url,
             data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
             headers={'Content-Type': 'application/json',
                      'Authorization': f'Bearer {API_KEY}'})
@@ -573,6 +596,29 @@ def _strip_group_prefix(text: str) -> str:
     return _GROUP_PREFIX_RE.sub('', text, count=1)
 
 
+def _split_at_trigger(text: str, extra=None):
+    """在消息里找最早的 @触发词，返回 (命中的名字, @ 后面剩下的文字)。
+
+    ``extra`` 是本会话额外的名字（Agent 的 at_name、全局别名、群昵称）。
+    按「最先出现」的算；同一位置时优先长名字，避免别名互为前缀时被截胡。
+    没命中返回 None。
+    """
+    names = []
+    for name in (extra or ()):
+        if name and name not in names:
+            names.append(name)
+    best = None                     # ((位置, -长度), 名字)，长度取负=长的优先
+    for name in names:
+        i = text.find(f'@{name}')
+        if i >= 0:
+            key = (i, -len(name))
+            if best is None or key < best[0]:
+                best = (key, name)
+    if best is None:
+        return None
+    return best[1], text[best[0][0] + len(best[1]) + 1:]
+
+
 class DaFeiYuBot:
     def __init__(self):
         self.llm = LLMClient()
@@ -586,6 +632,7 @@ class DaFeiYuBot:
         # 跟进对话已移除：只认 @ 触发
         self.paused = False               # 发送失败后置 True，暂停应答防继续乱动界面
         self._db = None                    # 搜索工具用的 WeChatDB，按需打开
+        self._at_names_cache = {}          # 会话 → 该会话的额外触发词（含群昵称）
         self._opencli = None               # (node, main.js) 缓存，None=还没找过
         self._cgpt_last = 0.0              # 上次 ChatGPT 调用时间
         self._cgpt_count = 0               # 当天已调用次数
@@ -1114,7 +1161,7 @@ class DaFeiYuBot:
                 answer = answer[1 + len(who):].lstrip(' \u2005，,：:')
             else:
                 m = re.match(r'^@(\S{1,32})\s*', answer)
-                if m and m.group(1) not in (AT_NAME, agent['at_name']):
+                if m and m.group(1) not in (list(AT_NAMES) + [agent['at_name']]):
                     at = m.group(1)
                     answer = answer[m.end():].lstrip()
         st['turns'].append((q, answer))
@@ -1284,6 +1331,35 @@ class DaFeiYuBot:
             self._db = WeChatDB()
         return self._db
 
+    def _trigger_aliases(self, chat_id: str) -> list:
+        """本会话的额外触发词：全局别名 + 本账号昵称 + 本账号在该群的群昵称。
+
+        微信在群里插入 @ 用的是**群昵称**（存在 contact.chat_room.ext_buffer，
+        跟账号昵称不是一回事）。比如账号叫「齊若柠」、在某个群的群昵称是
+        「1111」，别人点选 @ 得到的是「@1111」——只认固定词就漏了。
+        按会话缓存：一个群只查一次库。
+        """
+        cached = self._at_names_cache.get(chat_id)
+        if cached is not None:
+            return cached
+        names = list(AT_NAMES)
+        try:
+            db = self._ensure_db()
+            self_wxid = (db.get_self_info() or {}).get('username', '') or ''
+            if self_wxid:
+                nick = db.get_nickname(self_wxid) or ''
+                if nick and nick != self_wxid and nick not in names:
+                    names.append(nick)
+                if chat_id.endswith('@chatroom'):
+                    alias = db.get_group_aliases(chat_id).get(self_wxid, '')
+                    if alias and alias not in names:
+                        names.append(alias)
+        except Exception as e:
+            print(f'[触发词] 读本账号昵称/群昵称失败，只用默认触发词：{e}',
+                  flush=True)
+        self._at_names_cache[chat_id] = names
+        return names
+
     def search_group_messages(self, keyword: str = '', member: str = '',
                               group: str = '',
                               scope_username: str = None) -> str:
@@ -1396,12 +1472,13 @@ class DaFeiYuBot:
             agent = self.route(chat_id, where)
             if agent is None:
                 return
-            trigger = f'@{agent["at_name"]}'
-            # 只认 @：没被 @ 的一律不答（围观记录里已经有了，供上下文用）
-            if trigger not in text:
+            # 只认 @：触发词 = Agent 的 at_name + 全局别名 + 本账号在该群的群昵称
+            hit = _split_at_trigger(
+                text, [agent['at_name']] + self._trigger_aliases(chat_id))
+            if hit is None:
                 return
             # 去掉 @前缀（微信 @ 后面常跟 U+2005 特殊空格）
-            question = text.split(trigger, 1)[1]
+            question = hit[1]
             question = question.lstrip('\u2005\u2004\u2003 ').strip()
             if not question:
                 question = '在吗？'
@@ -1502,7 +1579,9 @@ class DaFeiYuBot:
             print(f'开启全局监听失败：{r}', flush=True)
             return
         wx.StartListening()
-        print(f'大肥鱼已上线：监听所有会话，@{AT_NAME} 触发回答，Ctrl+C 退出', flush=True)
+        print(f'大肥鱼已上线：监听所有会话，'
+              f'{"、".join("@" + n for n in AT_NAMES)} 触发回答，Ctrl+C 退出',
+              flush=True)
         for a in self.agents:
             print(f'[Agent] {a["name"]}（@{a["at_name"]}）'
                   f'{"" if a["enabled"] else "【已停用】"} → '

@@ -636,7 +636,7 @@ dialog.dlg::backdrop { background: rgba(7,13,26,.5); backdrop-filter: blur(3px);
       <div class="card cfg-sec">
         <h3>行为参数</h3>
         <div class="cfg-grid">
-          <label class="f"><span>触发名 AT_NAME</span><input class="input" data-k="AT_NAME"><em>群里 @这个名字才回答</em></label>
+          <label class="f"><span>触发词 AT_NAMES</span><input class="input" data-k="AT_NAMES"><em>逗号分隔；群里 @ 任一名字都回答（另自动认本账号群昵称）</em></label>
           <label class="f"><span>上下文消息数 RECENT_N</span><input class="input" type="number" data-k="RECENT_N"><em>附带最近多少条群消息</em></label>
           <label class="f"><span>回答长度 MAX_TOKENS</span><input class="input" type="number" data-k="MAX_TOKENS"></label>
           <label class="f"><span>LLM 超时（秒）</span><input class="input" type="number" data-k="LLM_TIMEOUT"></label>
@@ -1015,7 +1015,7 @@ async function loadConfig() {
     const r = await api('/api/config'); cfg = r.config; hosts = [...(cfg.API_HOSTS || [])];
     $$('#page-config [data-k]').forEach(el => el.value = cfg[el.dataset.k] ?? '');
     renderHosts(); promptStat(); markDirty(false);
-    $('#bn-model').textContent = '模型 ' + cfg.MODEL; $('#bn-nodes').textContent = hosts.length + ' 个节点'; $('#bn-at').textContent = '@' + cfg.AT_NAME;
+    $('#bn-model').textContent = '模型 ' + cfg.MODEL; $('#bn-nodes').textContent = hosts.length + ' 个节点'; $('#bn-at').textContent = '@' + (cfg.AT_NAMES || []).join('、');
     if (!r.file_exists) $('#saveMsg').textContent = '当前显示的是脚本默认值 + start_bot.cmd 环境变量，保存后生成 bot_config.json';
   } catch (e) { toast('配置加载失败：' + e.message, 'bad'); }
 }
