@@ -174,6 +174,86 @@ def _apply_config_overrides() -> None:
 
 _apply_config_overrides()
 
+# -- 多群 Agent ------------------------------------------------------------
+# bot_config.json 里的 AGENTS 列表：每个 Agent 绑定若干群（群 ID 或群名，
+# "*" = 兜底所有没被别的 Agent 认领的群），各自有触发名、人设、模型参数和
+# 可用工具；记忆按 (Agent, 群) 隔离。没配 AGENTS 时等价于一个绑定 "*" 的
+# 默认 Agent，行为和以前完全一样。AGENTS 改动热加载，不用重启。
+TOOL_NAMES = ('search_group_messages', 'get_ai_news', 'send_sticker',
+              'say_to_group', 'ask_chatgpt', 'chatgpt_image')
+
+
+def _norm_agent(d: dict, idx: int = 0) -> dict:
+    """补全 Agent 默认值；空字段回落到全局常量。"""
+    tools = d.get('tools')
+    return {
+        'id': str(d.get('id') or f'agent{idx}'),
+        'name': str(d.get('name') or AT_NAME),
+        'enabled': d.get('enabled', True) is not False,
+        'at_name': str(d.get('at_name') or '').strip() or AT_NAME,
+        'groups': [str(g).strip() for g in (d.get('groups') or []) if str(g).strip()],
+        'system_prompt': str(d.get('system_prompt') or '').strip() or SYSTEM_PROMPT,
+        'model': str(d.get('model') or '').strip() or None,
+        'temperature': float(d.get('temperature') if d.get('temperature') not in (None, '') else 0.7),
+        'max_tokens': int(d.get('max_tokens') or MAX_TOKENS),
+        'recent_n': int(d.get('recent_n') or RECENT_N),
+        'tools': list(TOOL_NAMES) if tools is None else [t for t in tools if t in TOOL_NAMES],
+    }
+
+
+def _load_agents() -> list:
+    try:
+        with open(BOT_CONFIG_FILE, encoding='utf-8') as f:
+            raw = json.load(f).get('AGENTS') or []
+    except FileNotFoundError:
+        raw = []
+    except Exception as e:
+        print(f'[配置] AGENTS 读取失败，用默认 Agent：{e}', flush=True)
+        raw = []
+    agents = [_norm_agent(a, i) for i, a in enumerate(raw) if isinstance(a, dict)]
+    return agents or [_norm_agent({'id': 'default', 'groups': ['*']})]
+
+
+# -- 用量记录 --------------------------------------------------------------
+# 每次 LLM 调用追加一行 JSON 到 usage.jsonl，管理页据此画 token 用量和缓存
+# 命中率。服务端返回 prompt_tokens_details.cached_tokens（vLLM 需开
+# --enable-prompt-tokens-details）就用真值；否则按「本次请求与同节点最近
+# 请求的最长公共前缀」估算前缀缓存复用量（cached_src='est'）。
+USAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'usage.jsonl')
+USAGE_MAX_BYTES = 20_000_000
+KNOWN_CHATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'known_chats.json')
+_usage_lock = threading.Lock()
+_ctx = threading.local()    # 当前回调线程在服务哪个群/Agent，用量记录用
+
+
+def _record_usage(rec: dict) -> None:
+    rec.setdefault('chat_id', getattr(_ctx, 'chat_id', ''))
+    rec.setdefault('chat_name', getattr(_ctx, 'chat_name', ''))
+    rec.setdefault('agent', getattr(_ctx, 'agent', ''))
+    line = json.dumps(rec, ensure_ascii=False) + '\n'
+    with _usage_lock:
+        try:
+            if os.path.exists(USAGE_FILE) and os.path.getsize(USAGE_FILE) > USAGE_MAX_BYTES:
+                os.replace(USAGE_FILE, USAGE_FILE + '.1')
+            with open(USAGE_FILE, 'a', encoding='utf-8') as f:
+                f.write(line)
+        except OSError:
+            pass
+
+
+def _common_prefix_len(a: str, b: str) -> int:
+    """二分 + 切片比较（C 速度），10 万字也只比十几次。"""
+    lo, hi = 0, min(len(a), len(b))
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if a[:mid] == b[:mid]:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
 # ChatGPT 工具：只暴露 ask（转问题拿回答），范围收敛在提示词+限流双层
 CHATGPT_TOOL = {
     'type': 'function',
@@ -397,10 +477,13 @@ class LLMClient:
     def __init__(self):
         self._start = 0
         self._lock = threading.Lock()
+        # 每个节点最近请求的序列化文本，估算前缀缓存命中用（近似 KV 缓存里还在的前缀）
+        self._history = {}
 
     def chat_raw(self, messages: list, tools: list = None,
                  temperature: float = 0.7,
-                 max_tokens: int = MAX_TOKENS) -> dict:
+                 max_tokens: int = MAX_TOKENS, model: str = None,
+                 kind: str = 'agent') -> dict:
         """粘性故障转移请求，返回完整的 assistant message dict。
 
         粘性节点：成功后 _start 停在赢家上，后续请求都打同一台机子——
@@ -413,7 +496,8 @@ class LLMClient:
         for i in range(len(API_HOSTS)):
             host = API_HOSTS[(start + i) % len(API_HOSTS)]
             try:
-                m = self._request(host, messages, tools, temperature, max_tokens)
+                m = self._request(host, messages, tools, temperature, max_tokens,
+                                  model or MODEL, kind)
                 # 带工具调用的回复没有正文，乱码检查只看纯文本回答
                 if (not m.get('tool_calls')
                         and _looks_garbled(m.get('content') or '')):
@@ -429,14 +513,16 @@ class LLMClient:
         raise last_err or RuntimeError('所有节点均失败')
 
     def chat(self, messages: list, temperature: float = 0.7,
-             max_tokens: int = MAX_TOKENS) -> str:
+             max_tokens: int = MAX_TOKENS, model: str = None,
+             kind: str = 'agent') -> str:
         """纯文本问答（不带工具），返回最终文本。"""
-        m = self.chat_raw(messages, None, temperature, max_tokens)
+        m = self.chat_raw(messages, None, temperature, max_tokens, model, kind)
         return (m.get('content') or '').strip()
 
     def _request(self, host: str, messages: list, tools: list,
-                 temperature: float, max_tokens: int) -> dict:
-        payload = {'model': MODEL, 'messages': messages,
+                 temperature: float, max_tokens: int, model: str,
+                 kind: str) -> dict:
+        payload = {'model': model, 'messages': messages,
                    'temperature': temperature, 'max_tokens': max_tokens}
         if tools:
             payload['tools'] = tools
@@ -445,9 +531,34 @@ class LLMClient:
             data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
             headers={'Content-Type': 'application/json',
                      'Authorization': f'Bearer {API_KEY}'})
+        t0 = time.time()
         with urllib.request.urlopen(req, timeout=LLM_TIMEOUT) as r:
             out = json.loads(r.read())
+        self._track(host, model, kind, tools, messages, out.get('usage') or {},
+                    time.time() - t0)
         return out['choices'][0]['message'] or {}
+
+    def _track(self, host, model, kind, tools, messages, usage, secs) -> None:
+        """记一条用量；服务端没给 cached_tokens 时按公共前缀估算。"""
+        try:
+            prompt = int(usage.get('prompt_tokens') or 0)
+            cached = (usage.get('prompt_tokens_details') or {}).get('cached_tokens')
+            src = 'server'
+            sig = json.dumps(tools or [], ensure_ascii=False) + \
+                json.dumps(messages, ensure_ascii=False)
+            with self._lock:
+                hist = self._history.setdefault(host, deque(maxlen=64))
+                if cached is None:
+                    best = max((_common_prefix_len(sig, h) for h in hist), default=0)
+                    cached, src = int(prompt * best / max(1, len(sig))), 'est'
+                hist.append(sig)
+            _record_usage({
+                'ts': round(time.time(), 1), 'host': host, 'model': model,
+                'kind': kind, 'prompt': prompt,
+                'completion': int(usage.get('completion_tokens') or 0),
+                'cached': int(cached), 'cached_src': src, 'secs': round(secs, 2)})
+        except Exception as e:                 # 统计出错绝不影响回话
+            print(f'[用量] 记录失败：{e}', flush=True)
 
 
 _GROUP_PREFIX_RE = None    # 延迟编译：群消息正文前的 "wxid_xxx:\n" 发送者前缀
@@ -480,11 +591,17 @@ class DaFeiYuBot:
         self._cgpt_count = 0               # 当天已调用次数
         self._cgpt_day = ''                # 当天日期（跨天重置计数）
         self.send_lock = threading.Lock()   # 回话驱动 GUI，必须串行
+        self.agents = _load_agents()        # 多群 Agent（bot_config.json AGENTS，热加载）
+        self._agents_mtime = self._cfg_mtime()
+        self.known = self._load_known()     # 见过的会话 {id: {name, last, group}}，管理页选群用
+        self._known_saved = 0.0
 
     # -- 围观记录 -------------------------------------------------------
 
     def _record(self, msg, chat) -> None:
-        buf = self.recent.setdefault(getattr(chat, 'who', ''), deque(maxlen=RECENT_N))
+        chat_id = getattr(chat, 'who', '')
+        self._touch_known(chat_id, getattr(chat, 'nickname', '') or chat_id)
+        buf = self.recent.setdefault(chat_id, deque(maxlen=max(RECENT_N, 100)))
         if msg.type in ('text', '文本'):
             text = _strip_group_prefix(msg.content or '').strip()
         else:
@@ -494,18 +611,68 @@ class DaFeiYuBot:
             buf.append((ts, getattr(msg, 'sender', '') or '有人',
                         text[:RECENT_LINE_MAX]))
 
-    def _recent_log(self, chat_id: str) -> str:
+    def _recent_log(self, chat_id: str, n: int = RECENT_N) -> str:
         """最近群消息日志（不含最后一条 = 当前触发消息），没有返回空串。
 
         每条带时间戳和昵称，模型引用群消息时能报出「谁、什么时候说的」。
         """
         lines = ['[%s] %s: %s' % (time.strftime('%m-%d %H:%M',
                                                  time.localtime(ts)), who, text)
-                 for ts, who, text in self.recent.get(chat_id, ())][:-1]
+                 for ts, who, text in self.recent.get(chat_id, ())][:-1][-n:]
         if not lines:
             return ''
         return ('【本群最近聊天记录（供参考，不一定与问题相关）】\n'
                 + '\n'.join(lines))
+
+    # -- 已知会话 / Agent 路由 ----------------------------------------------
+
+    @staticmethod
+    def _load_known() -> dict:
+        try:
+            with open(KNOWN_CHATS_FILE, encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _touch_known(self, chat_id: str, name: str) -> None:
+        """记下见过的会话；新会话立即落盘，老会话最多 60 秒落一次。"""
+        if not chat_id:
+            return
+        new = chat_id not in self.known
+        self.known[chat_id] = {'name': name, 'last': int(time.time()),
+                               'group': chat_id.endswith('@chatroom')}
+        if new or time.time() - self._known_saved > 60:
+            self._known_saved = time.time()
+            try:
+                tmp = KNOWN_CHATS_FILE + '.tmp'
+                with open(tmp, 'w', encoding='utf-8') as f:
+                    json.dump(self.known, f, ensure_ascii=False)
+                os.replace(tmp, KNOWN_CHATS_FILE)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _cfg_mtime():
+        try:
+            return os.path.getmtime(BOT_CONFIG_FILE)
+        except OSError:
+            return None
+
+    def route(self, chat_id: str, name: str):
+        """按群 ID / 群名找负责的 Agent：精确绑定优先，其次 "*" 兜底，都没有返回 None。
+
+        bot_config.json 改了就重新加载 AGENTS（管理页改 Agent 不用重启）。
+        """
+        mt = self._cfg_mtime()
+        if mt != self._agents_mtime:
+            self._agents_mtime = mt
+            self.agents = _load_agents()
+            print(f'[配置] AGENTS 已重新加载：{len(self.agents)} 个', flush=True)
+        live = [a for a in self.agents if a['enabled']]
+        for a in live:
+            if chat_id in a['groups'] or (name and name in a['groups']):
+                return a
+        return next((a for a in live if '*' in a['groups']), None)
 
     # -- 记忆管理 -------------------------------------------------------
 
@@ -526,7 +693,8 @@ class DaFeiYuBot:
             '摘要正文，不要评论。\n\n'
             f'【旧摘要】\n{old_summary or "（无）"}\n\n【新对话】\n{lines}')
         return self.llm.chat([{'role': 'user', 'content': prompt}],
-                             temperature=0.3, max_tokens=SUMMARY_MAX_TOKENS)
+                             temperature=0.3, max_tokens=SUMMARY_MAX_TOKENS,
+                             kind='summary')
 
     def _maybe_compress(self, chat_id: str, st: dict) -> None:
         """上下文估算 token 超限就滚动压缩最老的历史。"""
@@ -545,7 +713,8 @@ class DaFeiYuBot:
 
     # -- LLM 组装 -----------------------------------------------------
 
-    def _build_messages(self, st: dict, question: str) -> list:
+    def _build_messages(self, st: dict, question: str,
+                        prompt: str = None) -> list:
         """严格前缀追加：开头固定，其余内容只会在末尾长出新块。
 
         「最近群消息」不再作为临时 system 消息插在倒数第二位（那样下一轮
@@ -553,7 +722,7 @@ class DaFeiYuBot:
         (q, answer) 进历史——下一轮它原样出现在同一位置，vLLM 前缀缓存才能
         整段命中。唯一允许的前缀失效是滚动压缩和表情列表变化。
         """
-        msgs = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+        msgs = [{'role': 'system', 'content': prompt or SYSTEM_PROMPT}]
         if st['summary']:
             msgs.append({'role': 'system',
                          'content': f'【更早对话的摘要】\n{st["summary"]}'})
@@ -918,22 +1087,24 @@ class DaFeiYuBot:
         return '已发送' if ok else f'发送失败：{err}'
 
     def think(self, chat_id: str, question: str, recent: str = '',
-              who: str = '', chat=None) -> tuple:
+              who: str = '', chat=None, agent: dict = None) -> tuple:
         """带群上下文跑一轮 agent 循环，返回 (回答, 要@的昵称或 None)。
 
         提问带上「【昵称】」前缀进上下文和长期记忆，模型因此知道在跟谁
         说话；模型在回答开头写「@昵称」就转成真正的 @ 发出，没有就不 @。
+        记忆按 (Agent, 群) 隔离：同一个群换了 Agent 不会串人设。
         """
+        agent = agent or self.agents[0]
         st = self.memory.setdefault(
-            chat_id, {'summary': '', 'turns': deque()})
+            f'{agent["id"]}|{chat_id}', {'summary': '', 'turns': deque()})
         self._maybe_compress(chat_id, st)
         q = f'【{who}】{question}' if who else question
         if recent:
             # 围观记录拼进问题消息开头并随 (q, answer) 进历史：下一轮它原样
             # 留在原位，跨轮上下文严格前缀追加，vLLM 前缀缓存才能整段命中
             q = f'{recent}\n\n{q}'
-        msgs = self._build_messages(st, q)
-        answer = self._agent_loop(msgs, chat_id, chat)
+        msgs = self._build_messages(st, q, agent['system_prompt'])
+        answer = self._agent_loop(msgs, chat_id, chat, agent)
         at = None
         if answer.startswith('@'):
             # 优先按已知的发送者全名匹配（昵称可能带空格/emoji，按空白截断
@@ -943,7 +1114,7 @@ class DaFeiYuBot:
                 answer = answer[1 + len(who):].lstrip(' \u2005，,：:')
             else:
                 m = re.match(r'^@(\S{1,32})\s*', answer)
-                if m and m.group(1) not in (AT_NAME,):
+                if m and m.group(1) not in (AT_NAME, agent['at_name']):
                     at = m.group(1)
                     answer = answer[m.end():].lstrip()
         st['turns'].append((q, answer))
@@ -952,23 +1123,31 @@ class DaFeiYuBot:
     # -- agent 工具循环 ---------------------------------------------------
 
     def _agent_loop(self, msgs: list, chat_id: str = None,
-                    chat=None) -> str:
+                    chat=None, agent: dict = None) -> str:
         """跑工具调用循环，返回最终文本回答（可能为空串=只发了媒体）。
 
         工具轮次只是临时消息（不进长期记忆，不影响前缀稳定）；接口不支持
         工具或全部节点失败时降级为无工具直答，保证一定能回话。
         send_sticker 发的是真文件（表情/图片），发成功后模型可以只给空文字。
         """
+        agent = agent or self.agents[0]
+        allowed = set(agent['tools'])
+        all_tools = {'search_group_messages': SEARCH_TOOL, 'ask_chatgpt': CHATGPT_TOOL,
+                     'chatgpt_image': CHATGPT_IMAGE_TOOL, 'say_to_group': SAY_TOOL,
+                     'get_ai_news': AIHOT_TOOL}
+        tools = [t for n, t in all_tools.items() if n in allowed]
+        if 'send_sticker' in allowed:
+            tools.append(self._sticker_tool())
+        opts = {'temperature': agent['temperature'],
+                'max_tokens': agent['max_tokens'], 'model': agent['model']}
         media_sent = False
         for _ in range(TOOL_ROUNDS):
             try:
-                m = self.llm.chat_raw(
-                    msgs, tools=[SEARCH_TOOL, CHATGPT_TOOL, CHATGPT_IMAGE_TOOL,
-                                 SAY_TOOL, AIHOT_TOOL, self._sticker_tool()])
+                m = self.llm.chat_raw(msgs, tools=tools or None, **opts)
             except Exception as e:
                 print(f'[agent] 工具请求失败（{e}），降级为无工具直答',
                       flush=True)
-                text = self.llm.chat(msgs)
+                text = self.llm.chat(msgs, **opts)
                 return text if (text or media_sent) else FAIL_REPLY
             tcs = m.get('tool_calls') or []
             if not tcs:
@@ -988,7 +1167,9 @@ class DaFeiYuBot:
                 except Exception:
                     args = {}
                 name = fn.get('name') or ''
-                if name == 'say_to_group':
+                if name not in allowed:
+                    result = f'工具 {name} 未对当前 Agent 开放'
+                elif name == 'say_to_group':
                     result = self._say_to_group(args.get('text') or '', chat)
                 elif name == 'send_sticker':
                     result = self._send_sticker(args.get('name') or '', chat)
@@ -1012,7 +1193,7 @@ class DaFeiYuBot:
                              'tool_call_id': tc.get('id') or '',
                              'content': result})
         print('[agent] 工具轮数用尽，强制直接回答', flush=True)
-        text = self.llm.chat(msgs)
+        text = self.llm.chat(msgs, **opts)
         return text if (text or media_sent) else FAIL_REPLY
 
     def _exec_tool(self, name: str, args: dict, chat_id: str = None) -> str:
@@ -1210,24 +1391,31 @@ class DaFeiYuBot:
                 return                      # 只处理文本消息
             text = _strip_group_prefix(msg.content or '').strip()
             chat_id = getattr(chat, 'who', '')
+            where = getattr(chat, 'nickname', '') or chat_id
+            # 按群找负责的 Agent；没有 Agent 认领的群直接不理
+            agent = self.route(chat_id, where)
+            if agent is None:
+                return
+            trigger = f'@{agent["at_name"]}'
             # 只认 @：没被 @ 的一律不答（围观记录里已经有了，供上下文用）
-            if f'@{AT_NAME}' not in text:
+            if trigger not in text:
                 return
             # 去掉 @前缀（微信 @ 后面常跟 U+2005 特殊空格）
-            question = text.split(f'@{AT_NAME}', 1)[1]
+            question = text.split(trigger, 1)[1]
             question = question.lstrip('\u2005\u2004\u2003 ').strip()
             if not question:
                 question = '在吗？'
-            recent = self._recent_log(chat_id)
+            recent = self._recent_log(chat_id, agent['recent_n'])
 
-            where = getattr(chat, 'nickname', '') or chat_id
             who = getattr(msg, 'sender', '') or '有人'
-            print(f'[收到] {where} | {who}: {text!r}', flush=True)
+            # 「<Agent>」前缀给管理页按 Agent 统计对话用
+            print(f'[收到] <{agent["name"]}> {where} | {who}: {text!r}', flush=True)
+            _ctx.chat_id, _ctx.chat_name, _ctx.agent = chat_id, where, agent['id']
 
             t0 = time.time()
             try:
                 answer, at = self.think(chat_id, question, recent, who=who,
-                                        chat=chat)
+                                        chat=chat, agent=agent)
             except Exception as e:
                 print(f'[llm] 全部节点失败：{e}', flush=True)
                 answer, at = FAIL_REPLY, None
@@ -1315,6 +1503,10 @@ class DaFeiYuBot:
             return
         wx.StartListening()
         print(f'大肥鱼已上线：监听所有会话，@{AT_NAME} 触发回答，Ctrl+C 退出', flush=True)
+        for a in self.agents:
+            print(f'[Agent] {a["name"]}（@{a["at_name"]}）'
+                  f'{"" if a["enabled"] else "【已停用】"} → '
+                  f'{"、".join(a["groups"]) or "（未绑定群）"}', flush=True)
         wx.KeepRunning()
 
 
@@ -1326,6 +1518,7 @@ def main() -> None:
                          '配合 --member/--group')
     ap.add_argument('--member', default='', help='按发送者过滤（配合 --search）')
     ap.add_argument('--group', default='', help='按群名过滤（配合 --search）')
+    ap.add_argument('--agent', default='', help='--test 时用哪个 Agent（id，默认第一个）')
     args = ap.parse_args()
 
     _setup_logging()
@@ -1336,7 +1529,10 @@ def main() -> None:
     if args.test is not None:
         q = args.test.lstrip('\u2005 ').strip() or '在吗？'
         print(f'问：{q}')
-        answer, at = bot.think('--test--', q, who='测试用户')
+        agent = next((a for a in bot.agents if a['id'] == args.agent), bot.agents[0])
+        _ctx.chat_id, _ctx.chat_name, _ctx.agent = '--test--', '链路测试', agent['id']
+        print(f'Agent：{agent["name"]}（@{agent["at_name"]}）')
+        answer, at = bot.think('--test--', q, who='测试用户', agent=agent)
         print(f'答：{answer}' + (f'\n（将 @ {at}）' if at else ''))
         return
     bot.run()

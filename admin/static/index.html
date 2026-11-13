@@ -1,0 +1,1287 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>大肥鱼控制台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M8 32c8-14 26-18 38-8l10-8v32l-10-8C34 50 16 46 8 32z' fill='%233b82f6'/%3E%3Ccircle cx='20' cy='29' r='3' fill='white'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f3f6fb;
+  --bg-grad: radial-gradient(1200px 600px at 10% -10%, #dbeafe 0%, transparent 60%),
+             radial-gradient(900px 500px at 110% 10%, #e0f2fe 0%, transparent 55%);
+  --panel: #ffffff;
+  --panel-2: #f7f9fc;
+  --border: #e3e8f0;
+  --text: #0f172a;
+  --text-2: #475569;
+  --text-3: #94a3b8;
+  --brand: #2563eb;
+  --brand-2: #0ea5e9;
+  --brand-soft: #e8f0fe;
+  --ok: #10b981; --ok-soft: #d1fae5;
+  --warn: #f59e0b; --warn-soft: #fef3c7;
+  --bad: #ef4444; --bad-soft: #fee2e2;
+  --shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px -12px rgba(15,23,42,.12);
+  --side: #0b1b36;
+  --side-text: #a9bad6;
+  --term-bg: #0b1220;
+  --radius: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #070d1a; --bg-grad: radial-gradient(1200px 600px at 10% -10%, #0f2550 0%, transparent 60%),
+             radial-gradient(900px 500px at 110% 10%, #082f49 0%, transparent 55%);
+    --panel: #0f172a; --panel-2: #131d33; --border: #1e2a44;
+    --text: #e2e8f0; --text-2: #a3b1c9; --text-3: #64748b;
+    --brand: #60a5fa; --brand-2: #38bdf8; --brand-soft: #132a52;
+    --ok-soft: #063d2f; --warn-soft: #3d2c06; --bad-soft: #451a1a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.6);
+    --side: #050b17; --term-bg: #050a14;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #070d1a; --bg-grad: radial-gradient(1200px 600px at 10% -10%, #0f2550 0%, transparent 60%),
+           radial-gradient(900px 500px at 110% 10%, #082f49 0%, transparent 55%);
+  --panel: #0f172a; --panel-2: #131d33; --border: #1e2a44;
+  --text: #e2e8f0; --text-2: #a3b1c9; --text-3: #64748b;
+  --brand: #60a5fa; --brand-2: #38bdf8; --brand-soft: #132a52;
+  --ok-soft: #063d2f; --warn-soft: #3d2c06; --bad-soft: #451a1a;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.6);
+  --side: #050b17; --term-bg: #050a14;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 14px/1.6 "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: var(--text); background: var(--bg); background-image: var(--bg-grad); background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+.mono { font-family: "JetBrains Mono", "Cascadia Code", Consolas, monospace; }
+
+/* ---------- 布局 ---------- */
+.app { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+aside {
+  background: var(--side); color: var(--side-text); padding: 22px 14px;
+  position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 4px;
+}
+.logo { display: flex; align-items: center; gap: 10px; padding: 4px 10px 22px; color: #fff; }
+.logo img { width: 42px; height: 42px; flex: none; border-radius: 50%; object-fit: cover; object-position: center 20%;
+  background: linear-gradient(135deg, #38bdf8, #2563eb); padding: 2px; box-shadow: 0 0 0 2px rgba(56,189,248,.35); }
+.logo b { font-size: 17px; letter-spacing: .5px; display: block; }
+.logo small { font-size: 11px; color: var(--side-text); opacity: .8; }
+.nav { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 10px;
+  cursor: pointer; transition: .15s; user-select: none; border: 0; background: none; color: inherit; text-align: left; width: 100%; }
+.nav svg { width: 18px; height: 18px; flex: none; opacity: .85; }
+.nav:hover { background: rgba(255,255,255,.06); color: #fff; }
+.nav.active { background: linear-gradient(90deg, rgba(56,189,248,.22), rgba(37,99,235,.12)); color: #fff;
+  box-shadow: inset 2px 0 0 #38bdf8; }
+.nav .count { margin-left: auto; font-size: 11px; background: rgba(255,255,255,.1); padding: 0 7px; border-radius: 99px; }
+.side-art { margin-top: auto; position: relative; border-radius: 14px; overflow: hidden; aspect-ratio: 5 / 4;
+  box-shadow: 0 10px 24px -12px rgba(0,0,0,.6); }
+.side-art img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .6s ease; }
+.side-art:hover img { transform: scale(1.06); }
+.side-art span { position: absolute; inset: auto 0 0 0; padding: 22px 12px 9px; font-size: 12px; color: #fff;
+  background: linear-gradient(transparent, rgba(5,11,23,.85)); }
+@media (max-height: 760px) { .side-art { display: none; } }
+.side-foot { padding: 12px; font-size: 12px; display: flex; align-items: center; justify-content: space-between; }
+.theme-btn { background: rgba(255,255,255,.08); border: 0; border-radius: 8px; padding: 6px 10px; cursor: pointer; color: #fff; }
+
+main { padding: 28px 32px 48px; min-width: 0; }
+.page { display: none; animation: fade .25s ease; }
+.page.active { display: block; }
+@keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+.head h1 { margin: 0; font-size: 24px; letter-spacing: .3px; }
+.head p { margin: 2px 0 0; color: var(--text-2); }
+
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; min-width: 0; }
+.card h3 { margin: 0 0 14px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.card h3 .sub { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--text-3); }
+.grid { display: grid; gap: 18px; }
+.g4 { grid-template-columns: repeat(4, 1fr); }
+.g3 { grid-template-columns: 2fr 1fr; }
+.g2 { grid-template-columns: 1fr 1fr; }
+
+/* ---------- 按钮/输入 ---------- */
+.btn { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--panel);
+  padding: 8px 15px; border-radius: 10px; cursor: pointer; transition: .15s; font-weight: 500; white-space: nowrap; }
+.btn:hover { border-color: var(--brand); color: var(--brand); }
+.btn svg { width: 16px; height: 16px; }
+.btn.primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); border: 0; color: #fff; box-shadow: 0 6px 16px -6px rgba(37,99,235,.6); }
+.btn.primary:hover { filter: brightness(1.08); color: #fff; }
+.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.btn.sm { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
+.btn:disabled { opacity: .5; pointer-events: none; }
+.input, textarea.input, select.input { width: 100%; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 9px 12px; outline: none; transition: .15s; }
+.input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); background: var(--panel); }
+label.f { display: block; }
+label.f > span { display: block; font-size: 12.5px; color: var(--text-2); margin-bottom: 6px; font-weight: 500; }
+label.f > em { display: block; font-style: normal; font-size: 12px; color: var(--text-3); margin-top: 5px; }
+
+/* ---------- 状态 hero ---------- */
+.hero { position: relative; overflow: hidden; color: #fff; border: 0; min-height: 168px;
+  --tint: rgba(29,78,216,.95), rgba(2,132,199,.72) 40%, rgba(6,182,212,.08) 66%, rgba(29,78,216,.55) 100%;
+  background: linear-gradient(100deg, var(--tint)), url(/assets/hero-bg.webp) 52% 10% / 70% auto no-repeat, #8ccfe0; }
+.hero.stopped { --tint: rgba(30,41,59,.96), rgba(51,65,85,.8) 40%, rgba(100,116,139,.3) 66%, rgba(30,41,59,.7) 100%; }
+.hero.stopped::before { content: ""; position: absolute; inset: 0; backdrop-filter: grayscale(.7); pointer-events: none; }
+.hero.paused { --tint: rgba(180,83,9,.95), rgba(217,119,6,.78) 40%, rgba(245,158,11,.18) 66%, rgba(180,83,9,.6) 100%; }
+.hero .waves { position: absolute; inset: auto 0 0 0; height: 90px; opacity: .25; pointer-events: none; }
+.hero .waves path { animation: drift 9s linear infinite; }
+.hero .waves path:nth-child(2) { animation-duration: 14s; animation-direction: reverse; opacity: .6; }
+@keyframes drift { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.hero-row { position: relative; display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.fish { width: 112px; height: 112px; flex: none; object-fit: contain; margin: -14px -4px -26px -6px;
+  filter: drop-shadow(0 10px 18px rgba(0,0,0,.3)); }
+.running .fish { animation: bob 3s ease-in-out infinite; }
+@keyframes bob { 50% { transform: translateY(-6px) rotate(-3deg); } }
+.hero h2 { margin: 0; font-size: 22px; display: flex; align-items: center; gap: 10px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 99px; background: rgba(255,255,255,.2); }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; box-shadow: 0 0 0 0 rgba(74,222,128,.7); }
+.running .pill .dot { animation: ping 1.8s infinite; }
+@keyframes ping { 70% { box-shadow: 0 0 0 7px rgba(74,222,128,0); } 100% { box-shadow: 0 0 0 0 rgba(74,222,128,0); } }
+.stopped .pill .dot { background: #cbd5e1; }
+.paused .pill .dot { background: #fde68a; }
+.hero .meta { display: flex; gap: 22px; margin-top: 8px; font-size: 13px; opacity: .92; flex-wrap: wrap; }
+.hero .meta b { font-weight: 600; }
+.hero .actions { margin-left: auto; display: flex; gap: 10px; }
+.hero .btn { background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.3); color: #fff; backdrop-filter: blur(6px); }
+.hero .btn:hover { background: rgba(255,255,255,.28); color: #fff; }
+.hero .btn.solid { background: #fff; color: #1d4ed8; border: 0; }
+.hero.stopped .btn.solid { color: #334155; }
+.hero .warn-msg { position: relative; margin-top: 14px; background: rgba(0,0,0,.18); padding: 9px 14px; border-radius: 10px; font-size: 13px; }
+
+/* ---------- KPI ---------- */
+.kpi { display: flex; flex-direction: column; gap: 2px; position: relative; overflow: hidden; }
+.kpi .ico { position: absolute; right: 16px; top: 16px; width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; }
+.kpi .ico svg { width: 20px; height: 20px; }
+.kpi .lbl { color: var(--text-2); font-size: 13px; }
+.kpi .val { font-size: 30px; font-weight: 700; letter-spacing: -.5px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.kpi .val small { font-size: 14px; font-weight: 500; color: var(--text-3); margin-left: 3px; }
+.kpi .foot { font-size: 12px; color: var(--text-3); }
+.c-blue { background: var(--brand-soft); color: var(--brand); }
+.c-green { background: var(--ok-soft); color: var(--ok); }
+.c-amber { background: var(--warn-soft); color: var(--warn); }
+.c-pink { background: #fce7f3; color: #db2777; }
+:root[data-theme="dark"] .c-pink { background: #4a1530; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .c-pink { background: #4a1530; } }
+
+/* ---------- 图表 ---------- */
+.chart { width: 100%; height: 200px; display: block; }
+.chart .bar { fill: url(#barGrad); transition: opacity .15s; }
+.chart .bar:hover { opacity: .75; }
+.chart text { fill: var(--text-3); font-size: 10.5px; }
+.chart .grid-line { stroke: var(--border); stroke-dasharray: 3 4; }
+.rank { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+.rank li { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 13px; }
+.rank .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank .num { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.rank .track { grid-column: 1 / -1; height: 6px; background: var(--panel-2); border-radius: 99px; overflow: hidden; }
+.rank .fill { height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--brand), var(--brand-2)); transition: width .6s cubic-bezier(.2,.8,.2,1); }
+.empty { color: var(--text-3); text-align: center; padding: 26px 0; font-size: 13px; }
+.empty img { display: block; margin: 0 auto 10px; width: 108px; height: 108px; object-fit: cover; border-radius: 22px;
+  box-shadow: 0 10px 24px -14px rgba(15,23,42,.45); }
+.empty.big img { width: 160px; height: auto; max-height: 200px; object-fit: contain; }
+
+.err-list { display: flex; flex-direction: column; gap: 8px; max-height: 270px; overflow: auto; }
+.err { display: grid; grid-template-columns: auto 1fr; gap: 10px; font-size: 12.5px; padding: 8px 10px; border-radius: 9px; background: var(--panel-2); }
+.err time { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.err .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 7px; border-radius: 6px; margin-right: 6px; line-height: 19px; }
+.tag.bad { background: var(--bad-soft); color: var(--bad); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+.tag.ok { background: var(--ok-soft); color: var(--ok); }
+.tag.info { background: var(--brand-soft); color: var(--brand); }
+
+/* ---------- 对话 ---------- */
+.toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+.search { position: relative; flex: 1; min-width: 200px; max-width: 420px; }
+.search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--text-3); }
+.search .input { padding-left: 36px; }
+.conv-list { display: flex; flex-direction: column; gap: 14px; }
+.conv { padding: 18px 20px; }
+.conv-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 12.5px; color: var(--text-2); flex-wrap: wrap; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 600; font-size: 13px; flex: none; }
+.conv-top .who { color: var(--text); font-weight: 600; font-size: 13.5px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-top .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.bubble { border-radius: 4px 14px 14px 14px; padding: 10px 14px; white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
+.bubble.q { background: var(--panel-2); border: 1px solid var(--border); }
+.bubble.a { background: linear-gradient(135deg, var(--brand-soft), transparent 140%); border: 1px solid color-mix(in srgb, var(--brand) 22%, transparent); margin-top: 10px; border-radius: 14px 4px 14px 14px; margin-left: 40px; }
+.bubble.a .lbl { font-size: 11.5px; font-weight: 600; color: var(--brand); display: block; margin-bottom: 3px; }
+.steps { margin: 10px 0 0 40px; font-size: 12.5px; }
+.steps summary { cursor: pointer; color: var(--text-2); list-style: none; display: inline-flex; gap: 6px; align-items: center; }
+.steps summary::-webkit-details-marker { display: none; }
+.steps summary::before { content: "▸"; transition: .15s; }
+.steps[open] summary::before { transform: rotate(90deg); }
+.tl { list-style: none; margin: 10px 0 0; padding: 0 0 0 14px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.tl li { position: relative; color: var(--text-2); }
+.tl li::before { content: ""; position: absolute; left: -19px; top: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 3px var(--panel); }
+.tl li time { color: var(--text-3); margin-right: 8px; font-variant-numeric: tabular-nums; }
+
+/* ---------- 日志 ---------- */
+.term { background: var(--term-bg); border-radius: var(--radius); border: 1px solid #1e293b; box-shadow: var(--shadow); overflow: hidden; }
+.term-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(255,255,255,.03); border-bottom: 1px solid #1e293b; color: #94a3b8; font-size: 12.5px; flex-wrap: wrap; }
+.term-bar .dots { display: flex; gap: 6px; margin-right: 8px; }
+.term-bar .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+.term-bar .chip { border: 1px solid #334155; background: transparent; color: #94a3b8; border-radius: 99px; padding: 2px 10px; cursor: pointer; font-size: 12px; }
+.term-bar .chip.on { background: #1e3a8a; border-color: #3b82f6; color: #dbeafe; }
+.term-bar .spacer { flex: 1; }
+.term pre { margin: 0; padding: 14px 16px; height: calc(100vh - 230px); min-height: 360px; overflow: auto; color: #cbd5e1; font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-all; }
+.term .ts { color: #64748b; }
+.term .t-收到 { color: #38bdf8; } .term .t-回复 { color: #4ade80; } .term .t-工具 { color: #c084fc; }
+.term .t-表情, .term .t-say { color: #f472b6; } .term .t-ChatGPT { color: #fbbf24; }
+.term .t-err { color: #f87171; } .term .t-lib { color: #64748b; } .term .t-online { color: #2dd4bf; font-weight: 600; }
+
+/* ---------- 表情 ---------- */
+.drop { display: block; border: 2px dashed var(--border); border-radius: var(--radius); padding: 26px; text-align: center; color: var(--text-2); transition: .2s; cursor: pointer; background: var(--panel); margin-bottom: 18px; }
+.drop.over { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+.drop { display: flex; align-items: center; justify-content: center; gap: 22px; text-align: left; padding: 16px 26px; }
+.drop img { width: 86px; height: 86px; object-fit: contain; flex: none; transition: transform .3s; }
+.drop:hover img, .drop.over img { transform: rotate(-8deg) scale(1.06); }
+.drop svg { width: 18px; height: 18px; color: var(--brand); vertical-align: -3px; margin-right: 4px; }
+.stickers { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 16px; }
+.stk { padding: 0; overflow: hidden; display: flex; flex-direction: column; transition: transform .15s, box-shadow .15s; }
+.stk:hover { transform: translateY(-3px); box-shadow: 0 14px 30px -14px rgba(15,23,42,.35); }
+.stk .img { aspect-ratio: 1; background: repeating-conic-gradient(var(--panel-2) 0 25%, var(--panel) 0 50%) 0 0/18px 18px; display: grid; place-items: center; position: relative; }
+.stk img { max-width: 86%; max-height: 86%; object-fit: contain; }
+.stk .badge { position: absolute; top: 8px; left: 8px; font-size: 10.5px; font-weight: 700; background: rgba(15,23,42,.65); color: #fff; padding: 1px 7px; border-radius: 6px; text-transform: uppercase; }
+.stk .used { position: absolute; top: 8px; right: 8px; font-size: 11px; background: var(--brand); color: #fff; padding: 1px 8px; border-radius: 99px; }
+.stk .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); }
+.stk .nm { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; outline: none; border-radius: 6px; padding: 1px 4px; margin: -1px -4px; }
+.stk .nm[contenteditable="true"] { background: var(--panel-2); box-shadow: 0 0 0 2px var(--brand); white-space: normal; }
+.stk .row { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; color: var(--text-3); }
+.stk .ops { display: flex; gap: 4px; }
+.icon-btn { border: 0; background: none; padding: 4px; border-radius: 6px; cursor: pointer; color: var(--text-3); display: grid; place-items: center; }
+.icon-btn:hover { background: var(--panel-2); color: var(--brand); }
+.icon-btn.del:hover { color: var(--bad); }
+.icon-btn svg { width: 15px; height: 15px; }
+
+/* ---------- 配置 ---------- */
+.cfg-sec { margin-bottom: 18px; }
+.banner { position: relative; height: 176px; border-radius: var(--radius); overflow: hidden; margin-bottom: 18px; box-shadow: var(--shadow);
+  background: url(/assets/brand-bg.webp) center 26% / cover no-repeat, #eef3fb; display: flex; align-items: center; padding: 0 30px; }
+.banner::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(238,243,251,.9) 0%, rgba(238,243,251,.55) 40%, transparent 65%); }
+.banner > div { position: relative; z-index: 1; color: #0f172a; }
+.banner b { font-size: 20px; display: block; letter-spacing: .5px; }
+.banner span { color: #475569; font-size: 13px; }
+.banner .chipline { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.banner .chipline i { font-style: normal; font-size: 12px; background: rgba(255,255,255,.85); border: 1px solid #dbe4f3; color: #1d4ed8; padding: 2px 10px; border-radius: 99px; }
+:root[data-theme="dark"] .banner { filter: brightness(.86) saturate(1.05); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .banner { filter: brightness(.86) saturate(1.05); } }
+.cfg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); min-height: 44px; }
+.chips:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.chip-i { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 3px 6px 3px 10px; font-size: 13px; }
+.chip-i .n { font-size: 10.5px; color: var(--text-3); }
+.chip-i button { border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 0 3px; font-size: 15px; line-height: 1; }
+.chip-i button:hover { color: var(--bad); }
+.chips input { border: 0; outline: 0; background: none; flex: 1; min-width: 140px; padding: 3px 4px; }
+.pw { position: relative; }
+.pw .input { padding-right: 40px; }
+.pw button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); }
+textarea.prompt { min-height: 380px; font-size: 13px; line-height: 1.7; resize: vertical; }
+.savebar { position: sticky; bottom: 16px; margin-top: 20px; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent); backdrop-filter: blur(10px); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); }
+.savebar .msg { color: var(--text-2); font-size: 13px; flex: 1; }
+.savebar .dirty { color: var(--warn); font-weight: 600; }
+
+/* ---------- 调试 ---------- */
+.nodes { width: 100%; border-collapse: collapse; font-size: 13px; }
+.nodes th { text-align: left; font-weight: 500; color: var(--text-3); font-size: 12px; padding: 0 10px 8px; border-bottom: 1px solid var(--border); }
+.nodes td { padding: 11px 10px; border-bottom: 1px solid var(--border); }
+.nodes tr:last-child td { border-bottom: 0; }
+.lat { display: inline-flex; align-items: center; gap: 8px; }
+.lat .bar { width: 70px; height: 5px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
+.lat .bar i { display: block; height: 100%; background: var(--ok); }
+.out .empty { color: #94a3b8; padding: 18px 0 8px; font-family: inherit; white-space: normal; }
+.out { background: var(--term-bg); color: #e2e8f0; border-radius: 12px; padding: 14px 16px; min-height: 160px; max-height: 420px; overflow: auto; white-space: pre-wrap; font-size: 12.5px; margin: 14px 0 0; }
+
+/* ---------- toast / modal ---------- */
+.toasts { position: fixed; right: 22px; bottom: 22px; display: flex; flex-direction: column; gap: 10px; z-index: 99; }
+.toast { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--brand); border-radius: 10px; padding: 11px 16px; box-shadow: var(--shadow); font-size: 13.5px; min-width: 240px; animation: slide .25s ease; }
+.toast.ok { border-left-color: var(--ok); } .toast.bad { border-left-color: var(--bad); }
+@keyframes slide { from { opacity: 0; transform: translateX(20px); } }
+.spin { width: 15px; height: 15px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: rot .7s linear infinite; display: inline-block; }
+@keyframes rot { to { transform: rotate(360deg); } }
+.skeleton { background: linear-gradient(90deg, var(--panel-2) 25%, var(--border) 50%, var(--panel-2) 75%); background-size: 200% 100%; animation: sh 1.3s infinite; border-radius: 8px; }
+@keyframes sh { to { background-position: -200% 0; } }
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 1100px) {
+  .hero { background: linear-gradient(100deg, var(--tint)), url(/assets/hero-bg.webp) 70% 20% / cover no-repeat, #1d4ed8; }
+  .hero h2, .hero .meta { text-shadow: 0 1px 6px rgba(0,0,0,.4); }
+}
+@media (max-width: 1100px) { .g4 { grid-template-columns: repeat(2, 1fr); } .g3, .g2 { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; }
+  aside { position: fixed; bottom: 0; top: auto; left: 0; right: 0; height: auto; flex-direction: row; padding: 6px; z-index: 50; justify-content: space-around; }
+  .logo, .side-foot, .side-art, .nav span, .nav .count { display: none; }
+  .hero { background: linear-gradient(180deg, rgba(2,6,23,.1) 15%, rgba(2,6,23,.6) 60%), linear-gradient(100deg, var(--tint)), url(/assets/hero-bg.webp) 70% 20% / cover no-repeat, #1d4ed8; }
+  .hero h2, .hero .meta { text-shadow: 0 1px 6px rgba(0,0,0,.45); }
+  .banner { padding: 0 18px; }
+  .nav { justify-content: center; width: auto; padding: 10px 14px; }
+  main { padding: 18px 16px 90px; }
+  .g4 { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hero .actions { margin-left: 0; width: 100%; }
+  .bubble.a, .steps { margin-left: 0; }
+}
+
+/* ---------- 图表系列色（经 dataviz 校验：浅/深色各自一套） ---------- */
+:root { --s-miss: #4f46e5; --s-hit: #0ea5e9; --s-out: #d97706; --s-line: #2563eb; }
+:root[data-theme="dark"] { --s-miss: #6366f1; --s-hit: #0891b2; --s-out: #d97706; --s-line: #60a5fa; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --s-miss: #6366f1; --s-hit: #0891b2; --s-out: #d97706; --s-line: #60a5fa; } }
+.kpis { grid-template-columns: repeat(6, 1fr); }
+#useKpis { grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 1400px) { .kpis, #useKpis { grid-template-columns: repeat(3, 1fr); } .ring { display: none; } .kpi.has-ring { padding-right: 20px; } }
+@media (max-width: 760px) { .kpis, #useKpis { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---------- 开关 ---------- */
+.switch { position: relative; width: 38px; height: 22px; flex: none; cursor: pointer; }
+.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+.switch i { position: absolute; inset: 0; border-radius: 99px; background: var(--border); transition: .2s; }
+.switch i::after { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: .2s; }
+.switch input:checked + i { background: linear-gradient(135deg, var(--brand), var(--brand-2)); }
+.switch input:checked + i::after { transform: translateX(16px); }
+
+/* ---------- Agent ---------- */
+.agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
+.agent-card { display: flex; flex-direction: column; gap: 14px; position: relative; overflow: hidden; transition: transform .15s, box-shadow .15s; }
+.agent-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 4px; background: var(--ag, var(--brand)); }
+.agent-card:hover { transform: translateY(-2px); box-shadow: 0 16px 34px -18px rgba(15,23,42,.4); }
+.agent-card.off { opacity: .62; }
+.agent-card.off::before { background: var(--border); }
+.ag-top { display: flex; align-items: center; gap: 12px; }
+.ag-ava { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 19px; flex: none;
+  background: var(--ag); box-shadow: 0 8px 18px -8px var(--ag); }
+.ag-top .t { min-width: 0; flex: 1; }
+.ag-top b { font-size: 16px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-top small { color: var(--text-3); font-size: 12.5px; }
+.ag-groups { display: flex; flex-wrap: wrap; gap: 6px; min-height: 26px; }
+.gchip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 10px; border-radius: 99px; background: var(--panel-2); border: 1px solid var(--border); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gchip.star { background: var(--brand-soft); border-color: transparent; color: var(--brand); font-weight: 600; }
+.ag-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; background: var(--panel-2); border-radius: 12px; padding: 10px 12px; }
+.ag-stats div { display: flex; flex-direction: column; }
+.ag-stats span { font-size: 11.5px; color: var(--text-3); }
+.ag-stats b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.ag-meta { font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.ag-ops { display: flex; gap: 8px; margin-top: auto; }
+.ag-new { border: 2px dashed var(--border); background: transparent; box-shadow: none; display: grid; place-items: center; min-height: 260px; cursor: pointer; color: var(--text-2); text-align: center; }
+.ag-new:hover { border-color: var(--brand); color: var(--brand); }
+.ag-new img { width: 96px; height: 96px; object-fit: contain; display: block; margin: 0 auto 6px; }
+
+dialog.dlg { border: 0; padding: 0; border-radius: 18px; width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); background: var(--panel); color: var(--text); box-shadow: 0 30px 80px -20px rgba(0,0,0,.5); }
+dialog.dlg::backdrop { background: rgba(7,13,26,.5); backdrop-filter: blur(3px); }
+.dlg form { display: flex; flex-direction: column; max-height: calc(100vh - 48px); }
+.dlg header { display: flex; align-items: center; gap: 12px; padding: 18px 22px; border-bottom: 1px solid var(--border); }
+.dlg header h2 { margin: 0; font-size: 17px; flex: 1; }
+.dlg .bd { padding: 20px 22px; overflow: auto; display: flex; flex-direction: column; gap: 16px; }
+.dlg footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--border); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.row4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.suggest button { border: 1px dashed var(--border); background: none; border-radius: 99px; padding: 2px 10px; font-size: 12px; cursor: pointer; color: var(--text-2); }
+.suggest button:hover { border-color: var(--brand); color: var(--brand); }
+.tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.tool-opt { display: flex; gap: 10px; align-items: flex-start; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; font-size: 13px; }
+.tool-opt:has(input:checked) { border-color: var(--brand); background: var(--brand-soft); }
+.tool-opt small { display: block; color: var(--text-3); font-size: 11.5px; }
+.tool-opt input { margin-top: 3px; accent-color: var(--brand); }
+
+/* ---------- 用量 ---------- */
+.seg { display: inline-flex; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: none; padding: 5px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-2); }
+.seg button.on { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.note { display: flex; gap: 10px; align-items: center; background: var(--warn-soft); color: var(--text); border-radius: 12px; padding: 10px 14px; font-size: 13px; margin-bottom: 18px; }
+.note b { color: var(--warn); }
+.kpi.has-ring { padding-right: 84px; }
+.ring { --p: 0; width: 56px; height: 56px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  background: conic-gradient(var(--s-hit) calc(var(--p) * 1%), var(--panel-2) 0); position: absolute; right: 16px; top: 50%; transform: translateY(-50%); }
+.ring::after { content: ""; position: absolute; inset: 8px; border-radius: 50%; background: var(--panel); }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-2); margin: -4px 0 10px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.chart-wrap { position: relative; }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: 10px; padding: 8px 11px; font-size: 12px; min-width: 150px; z-index: 5; opacity: 0; transition: opacity .1s; }
+.tip b { display: block; margin-bottom: 4px; }
+.tip div { display: flex; justify-content: space-between; gap: 14px; color: var(--text-2); }
+.tip div span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
+.tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.uchart { width: 100%; height: 230px; display: block; }
+.uchart text { fill: var(--text-3); font-size: 10.5px; }
+.uchart .gl { stroke: var(--border); stroke-dasharray: 3 4; }
+.uchart .hit { fill: transparent; cursor: crosshair; }
+.uchart .col:hover .seg-r { opacity: .85; }
+#byHost, #byAgent, #byChat, #useRecent { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th { text-align: left; font-weight: 500; color: var(--text-3); font-size: 12px; padding: 0 8px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.tbl td { padding: 9px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl td.r, .tbl th.r { text-align: right; }
+.tbl .nm { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hitbar { display: inline-flex; align-items: center; gap: 8px; }
+.hitbar span { width: 56px; height: 5px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
+.hitbar span i { display: block; height: 100%; background: var(--s-hit); }
+@media (max-width: 760px) { .row2, .row4 { grid-template-columns: 1fr 1fr; } .agents { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></symbol>
+    <symbol id="i-smile" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+    <symbol id="i-bug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9V7a3 3 0 0 1 6 0v2M8 9h8a2 2 0 0 1 2 2v3a6 6 0 0 1-12 0v-3a2 2 0 0 1 2-2zM12 20v-7M3 13h3M18 13h3M4 7l3 2M20 7l-3 2M4 19l3-2M20 19l-3-2"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.9l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 7 4.5z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8M21 3v5h-5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-msg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-tool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8M14.7 6.3 9 12M3 21l6-6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13h12l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9 17h6M2 13v2M22 13v2"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+    <symbol id="fish" viewBox="0 0 120 120">
+      <defs>
+        <linearGradient id="fb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7dd3fc"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+      </defs>
+      <path d="M96 60l20-20v40z" fill="#1d4ed8"/>
+      <ellipse cx="56" cy="60" rx="46" ry="34" fill="url(#fb)"/>
+      <path d="M22 70c14 14 46 16 66 2-10 16-54 18-66-2z" fill="#e0f2fe" opacity=".85"/>
+      <path d="M48 28c6-10 20-12 26-4-8-2-16 0-26 4z" fill="#1d4ed8"/>
+      <circle cx="34" cy="52" r="9" fill="#fff"/><circle cx="32" cy="53" r="5" fill="#0f172a"/><circle cx="30" cy="51" r="1.8" fill="#fff"/>
+      <ellipse cx="26" cy="66" rx="5" ry="3" fill="#fda4af" opacity=".7"/>
+      <path d="M16 62q4 4 8 0" stroke="#0f172a" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <circle cx="70" cy="46" r="3" fill="#fff" opacity=".5"/><circle cx="78" cy="52" r="2" fill="#fff" opacity=".4"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <aside>
+    <div class="logo">
+      <img src="/assets/pet-idle.webp" alt="">
+      <div><b>大肥鱼</b><small>微信 AI 机器人控制台</small></div>
+    </div>
+    <button class="nav active" data-page="home"><svg><use href="#i-home"/></svg><span>总览</span></button>
+    <button class="nav" data-page="agents"><svg><use href="#i-bot"/></svg><span>Agent</span><em class="count" id="nav-agents">–</em></button>
+    <button class="nav" data-page="convs"><svg><use href="#i-chat"/></svg><span>对话记录</span><em class="count" id="nav-convs">–</em></button>
+    <button class="nav" data-page="usage"><svg><use href="#i-chart"/></svg><span>用量</span></button>
+    <button class="nav" data-page="logs"><svg><use href="#i-term"/></svg><span>实时日志</span></button>
+    <button class="nav" data-page="stickers"><svg><use href="#i-smile"/></svg><span>表情包</span><em class="count" id="nav-stk">–</em></button>
+    <button class="nav" data-page="config"><svg><use href="#i-gear"/></svg><span>配置</span></button>
+    <button class="nav" data-page="debug"><svg><use href="#i-bug"/></svg><span>调试</span></button>
+    <div class="side-art" title="今天也在认真摸鱼"><img src="/assets/coffee.webp" alt=""><span>☕ 今天也在认真摸鱼</span></div>
+    <div class="side-foot">
+      <span id="clock" class="mono"></span>
+      <button class="theme-btn" id="themeBtn" title="切换深浅色"><svg width="14" height="14"><use href="#i-moon"/></svg></button>
+    </div>
+  </aside>
+
+  <main>
+    <!-- 总览 -->
+    <section class="page active" id="page-home">
+      <div class="head">
+        <div><h1>总览</h1><p>机器人运行状态与今日数据</p></div>
+        <button class="btn sm" onclick="loadStatus(true)"><svg><use href="#i-refresh"/></svg>刷新</button>
+      </div>
+
+      <div class="card hero stopped" id="hero">
+        <svg class="waves" viewBox="0 0 1200 90" preserveAspectRatio="none">
+          <path d="M0 50 Q150 20 300 50 T600 50 T900 50 T1200 50 T1500 50 T1800 50 T2100 50 T2400 50 V90 H0z" fill="#fff"/>
+          <path d="M0 60 Q150 35 300 60 T600 60 T900 60 T1200 60 T1500 60 T1800 60 T2100 60 T2400 60 V90 H0z" fill="#fff"/>
+        </svg>
+        <div class="hero-row">
+          <img class="fish" id="hero-pet" src="/assets/pet-idle.webp" alt="">
+          <div>
+            <h2><span id="hero-title">加载中…</span><span class="pill"><i class="dot"></i><span id="hero-pill">–</span></span></h2>
+            <div class="meta" id="hero-meta"></div>
+          </div>
+          <div class="actions" id="hero-actions"></div>
+        </div>
+        <div class="warn-msg" id="hero-warn" hidden></div>
+      </div>
+
+      <div class="grid kpis" style="margin-top:18px" id="kpis"></div>
+
+      <div class="grid g3" style="margin-top:18px">
+        <div class="card">
+          <h3>近 24 小时提问量<span class="sub" id="hourly-sub"></span></h3>
+          <svg class="chart" id="hourly" viewBox="0 0 720 200" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="card">
+          <h3>今日工具调用</h3>
+          <ul class="rank" id="tools"></ul>
+        </div>
+      </div>
+
+      <div class="grid g3" style="margin-top:18px">
+        <div class="grid g2" style="gap:18px">
+          <div class="card"><h3>活跃群聊<span class="sub">近 7 天</span></h3><ul class="rank" id="groups"></ul></div>
+          <div class="card"><h3>提问最多<span class="sub">近 7 天</span></h3><ul class="rank" id="users"></ul></div>
+        </div>
+        <div class="card"><h3>异常与告警<span class="sub" id="err-sub"></span></h3><div class="err-list" id="errors"></div></div>
+      </div>
+    </section>
+
+    <!-- 对话 -->
+    <section class="page" id="page-convs">
+      <div class="head"><div><h1>对话记录</h1><p>@大肥鱼 的提问与回答，含每轮的工具调用过程</p></div></div>
+      <div class="toolbar">
+        <label class="search"><svg><use href="#i-search"/></svg><input class="input" id="convQ" placeholder="搜索问题、回答、群名或成员…"></label>
+        <select class="input" id="convAgent" style="width:auto"><option value="">全部 Agent</option></select>
+        <select class="input" id="convFilter" style="width:auto">
+          <option value="">全部状态</option><option value="ok">成功</option><option value="fail">失败</option><option value="pending">处理中</option>
+        </select>
+        <button class="btn sm" onclick="loadConvs()"><svg><use href="#i-refresh"/></svg>刷新</button>
+      </div>
+      <div class="conv-list" id="convs"></div>
+    </section>
+
+    <!-- 日志 -->
+    <section class="page" id="page-agents">
+      <div class="head">
+        <div><h1>Agent</h1><p>每个群一条独立的鱼：触发名、人设、模型和工具分开配置，记忆按群隔离。保存后机器人自动热加载，不用重启</p></div>
+        <button class="btn primary" onclick="editAgent(-1)"><svg><use href="#i-plus"/></svg>新建 Agent</button>
+      </div>
+      <div class="agents" id="agents"></div>
+    </section>
+
+    <section class="page" id="page-usage">
+      <div class="head">
+        <div><h1>用量</h1><p>每次 LLM 调用的 token 与前缀缓存命中（usage.jsonl）</p></div>
+        <div class="seg" id="useDays"><button data-d="1">今日</button><button data-d="7" class="on">7 天</button><button data-d="30">30 天</button></div>
+      </div>
+      <div class="grid kpis" id="useKpis"></div>
+      <div class="card" style="margin-top:18px">
+        <h3 id="useTitle">每日 Token</h3>
+        <div class="legend"><span><i style="background:var(--s-hit)"></i>输入 · 缓存命中</span><span><i style="background:var(--s-miss)"></i>输入 · 未命中</span><span><i style="background:var(--s-out)"></i>输出</span>
+          <button class="btn sm" style="margin-left:auto" onclick="toggleUseTable()">表格</button></div>
+        <div class="chart-wrap"><svg class="uchart" id="useBars"></svg><div class="tip" id="useTip"></div></div>
+        <div id="useTable" hidden style="margin-top:12px;overflow:auto"></div>
+      </div>
+      <div class="grid g3" style="margin-top:18px">
+        <div class="card"><h3>缓存命中率<span class="sub" id="hitSub"></span></h3>
+          <div class="chart-wrap"><svg class="uchart" id="useHit" style="height:200px"></svg><div class="tip" id="hitTip"></div></div></div>
+        <div class="card"><h3>按节点</h3><div id="byHost"></div></div>
+      </div>
+      <div class="grid g2" style="margin-top:18px">
+        <div class="card"><h3>按 Agent</h3><div id="byAgent"></div></div>
+        <div class="card"><h3>按群聊</h3><div id="byChat"></div></div>
+      </div>
+      <div class="card" style="margin-top:18px"><h3>最近调用<span class="sub">最新 30 次</span></h3><div id="useRecent" style="overflow:auto"></div></div>
+    </section>
+
+    <section class="page" id="page-logs">
+      <div class="head"><div><h1>实时日志</h1><p>dafeiyu_bot.log，每 1.5 秒增量刷新</p></div></div>
+      <div class="term">
+        <div class="term-bar">
+          <span class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#4ade80"></i></span>
+          <button class="chip on" data-f="all">全部</button>
+          <button class="chip" data-f="conv">对话</button>
+          <button class="chip" data-f="tool">工具</button>
+          <button class="chip" data-f="err">异常</button>
+          <button class="chip" data-f="nolib">隐藏库日志</button>
+          <span class="spacer"></span>
+          <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="follow" checked> 自动滚动</label>
+          <button class="chip" id="logClear">清屏</button>
+        </div>
+        <pre class="mono" id="log"></pre>
+      </div>
+    </section>
+
+    <!-- 表情包 -->
+    <section class="page" id="page-stickers">
+      <div class="head"><div><h1>表情包</h1><p>stickers/ 目录。文件名就是模型挑表情的依据，写清使用场景效果最好；改动后重启机器人生效</p></div></div>
+      <label class="drop" id="drop">
+        <img src="/assets/wave.webp" alt="">
+        <span><b><svg><use href="#i-upload"/></svg>拖拽图片到这里，或点击选择</b><br><small>支持 GIF（动画表情）/ JPG / PNG / WEBP，单个 ≤ 10MB</small></span>
+        <input type="file" id="fileIn" accept=".gif,.jpg,.jpeg,.png,.webp,.bmp" multiple hidden>
+      </label>
+      <div class="stickers" id="stickers"></div>
+    </section>
+
+    <!-- 配置 -->
+    <section class="page" id="page-config">
+      <div class="head"><div><h1>配置</h1><p>保存到 bot_config.json，启动时覆盖 dafeiyu_bot.py 里的同名常量</p></div></div>
+      <div class="banner"><div><b>调教大肥鱼</b><span>节点、参数和人设都在这里，改完重启生效</span>
+        <div class="chipline"><i id="bn-model">–</i><i id="bn-nodes">–</i><i id="bn-at">–</i></div></div></div>
+      <div class="card cfg-sec">
+        <h3>LLM 节点</h3>
+        <div class="grid" style="gap:16px">
+          <label class="f"><span>节点地址 API_HOSTS</span>
+            <div class="chips" id="hosts"><input id="hostIn" placeholder="输入 IP 回车添加…"></div>
+            <em>粘性故障转移：粘住一台用，失败才按顺序切到下一台</em></label>
+          <div class="cfg-grid">
+            <label class="f"><span>端口 API_PORT</span><input class="input mono" data-k="API_PORT" type="number"></label>
+            <label class="f"><span>模型 MODEL</span><input class="input mono" data-k="MODEL"></label>
+            <label class="f"><span>API Key</span><div class="pw"><input class="input mono" data-k="API_KEY" type="password"><button class="icon-btn" type="button" onclick="togglePw(this)"><svg><use href="#i-eye"/></svg></button></div></label>
+          </div>
+        </div>
+      </div>
+      <div class="card cfg-sec">
+        <h3>行为参数</h3>
+        <div class="cfg-grid">
+          <label class="f"><span>触发名 AT_NAME</span><input class="input" data-k="AT_NAME"><em>群里 @这个名字才回答</em></label>
+          <label class="f"><span>上下文消息数 RECENT_N</span><input class="input" type="number" data-k="RECENT_N"><em>附带最近多少条群消息</em></label>
+          <label class="f"><span>回答长度 MAX_TOKENS</span><input class="input" type="number" data-k="MAX_TOKENS"></label>
+          <label class="f"><span>LLM 超时（秒）</span><input class="input" type="number" data-k="LLM_TIMEOUT"></label>
+          <label class="f"><span>工具轮数 TOOL_ROUNDS</span><input class="input" type="number" data-k="TOOL_ROUNDS"></label>
+          <label class="f"><span>搜索天数 SEARCH_DAYS</span><input class="input" type="number" data-k="SEARCH_DAYS"></label>
+          <label class="f"><span>记忆压缩阈值（token）</span><input class="input" type="number" data-k="CONTEXT_TOKEN_LIMIT"></label>
+          <label class="f"><span>发送重试次数</span><input class="input" type="number" data-k="SEND_RETRIES"></label>
+          <label class="f"><span>ChatGPT 冷却（秒）</span><input class="input" type="number" data-k="CHATGPT_COOLDOWN"></label>
+          <label class="f"><span>ChatGPT 超时（秒）</span><input class="input" type="number" data-k="CHATGPT_TIMEOUT"></label>
+        </div>
+        <label class="f" style="margin-top:16px"><span>失败兜底回复 FAIL_REPLY</span><input class="input" data-k="FAIL_REPLY"></label>
+      </div>
+      <div class="card cfg-sec">
+        <h3>人设提示词 SYSTEM_PROMPT<span class="sub" id="promptStat"></span></h3>
+        <textarea class="input prompt" data-k="SYSTEM_PROMPT" spellcheck="false"></textarea>
+      </div>
+      <div class="savebar">
+        <span class="msg" id="saveMsg">修改后点保存，重启机器人生效</span>
+        <button class="btn" onclick="loadConfig()">还原</button>
+        <button class="btn" onclick="saveConfig(true)"><svg><use href="#i-refresh"/></svg>保存并重启</button>
+        <button class="btn primary" onclick="saveConfig(false)"><svg><use href="#i-check"/></svg>保存</button>
+      </div>
+    </section>
+
+    <!-- 调试 -->
+    <section class="page" id="page-debug">
+      <div class="head"><div><h1>调试</h1><p>LLM 节点连通性与完整链路测试（不连微信，不会往群里发消息）</p></div></div>
+      <div class="grid g2">
+        <div class="card">
+          <h3>节点探测<span class="sub">GET /v1/models</span></h3>
+          <table class="nodes"><thead><tr><th>节点</th><th>状态</th><th>延迟</th><th>模型</th></tr></thead><tbody id="nodes"></tbody></table>
+          <button class="btn" style="margin-top:14px" id="probeBtn" onclick="probe()"><svg><use href="#i-refresh"/></svg>重新探测</button>
+        </div>
+        <div class="card">
+          <h3>链路测试<span class="sub">dafeiyu_bot.py --test</span></h3>
+          <div style="display:flex;gap:10px">
+            <select class="input" id="testAgent" style="width:auto;max-width:150px"></select>
+            <input class="input" id="testQ" placeholder="问大肥鱼一句话，比如：今天的AI热点" value="在吗？介绍一下你自己">
+            <button class="btn primary" id="testBtn" onclick="runTest()"><svg><use href="#i-play"/></svg>发送</button>
+          </div>
+          <pre class="out mono" id="testOut"><div class="empty"><img src="/assets/gotit.webp" alt="">问一句，看看大肥鱼的完整回答链路</div></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<dialog class="dlg" id="agentDlg">
+  <form method="dialog" onsubmit="return false">
+    <header><span class="ag-ava" id="dlgAva" style="width:38px;height:38px;font-size:16px;border-radius:11px">鱼</span><h2 id="dlgTitle">编辑 Agent</h2>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2)">启用 <span class="switch"><input type="checkbox" id="f-enabled"><i></i></span></label></header>
+    <div class="bd">
+      <div class="row2">
+        <label class="f"><span>名字</span><input class="input" id="f-name" placeholder="比如：技术鱼"><em>管理页里显示的名字</em></label>
+        <label class="f"><span>触发名（@ 谁才回答）</span><input class="input" id="f-at" placeholder=""><em>机器人在这些群里的群昵称；留空用全局触发名</em></label>
+      </div>
+      <label class="f"><span>绑定的群</span>
+        <div class="chips" id="f-groups"><input id="f-groupIn" list="chatList" placeholder="输入群名或群 ID，回车添加…"></div>
+        <datalist id="chatList"></datalist>
+        <div class="suggest" id="f-suggest"></div>
+        <em><label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="f-fallback"> 兜底：所有没被其它 Agent 认领的群都归它（最多一个）</label></em></label>
+      <label class="f"><span>人设提示词 <a href="#" onclick="copyGlobalPrompt();return false" style="float:right;font-weight:400;color:var(--brand)">复制全局人设来改</a></span>
+        <textarea class="input prompt" id="f-prompt" style="min-height:220px" placeholder="留空 = 使用「配置」页的全局人设"></textarea></label>
+      <div class="row4">
+        <label class="f"><span>模型</span><input class="input mono" id="f-model"></label>
+        <label class="f"><span>温度</span><input class="input" id="f-temp" type="number" step="0.1" min="0" max="2" placeholder="0.7"></label>
+        <label class="f"><span>回答长度</span><input class="input" id="f-maxtok" type="number"></label>
+        <label class="f"><span>上下文消息数</span><input class="input" id="f-recent" type="number"></label>
+      </div>
+      <div class="f"><span style="display:block;font-size:12.5px;color:var(--text-2);margin-bottom:8px;font-weight:500">可用工具</span><div class="tools-grid" id="f-tools"></div></div>
+    </div>
+    <footer><button class="btn" type="button" onclick="$('#agentDlg').close()">取消</button><button class="btn primary" type="button" onclick="saveAgentDlg()"><svg><use href="#i-check"/></svg>保存</button></footer>
+  </form>
+</dialog>
+<div class="toasts" id="toasts"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+function toast(msg, kind = '') {
+  const t = document.createElement('div');
+  t.className = 'toast ' + kind; t.textContent = msg;
+  $('#toasts').append(t);
+  setTimeout(() => { t.style.transition = '.3s'; t.style.opacity = 0; setTimeout(() => t.remove(), 300); }, 3200);
+}
+function fmtDur(s) {
+  if (s == null) return '–';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}天${h}小时` : h ? `${h}小时${m}分` : `${m}分${s % 60}秒`;
+}
+const empty = (img, text, big) => `<div class="empty${big ? ' big' : ''}"><img src="/assets/${img}.webp" alt="">${text}</div>`;
+function fmtTok(n) { n = n || 0; return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'K' : String(n); }
+function fmtSize(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB'; }
+function hue(s) { let h = 0; for (const c of s) h = (h * 31 + c.codePointAt(0)) % 360; return h; }
+function initial(s) { const m = String(s).match(/[\p{Script=Han}A-Za-z0-9]/u); return m ? m[0].toUpperCase() : '🐟'; }
+
+/* ---------- 路由 ---------- */
+const AG_TOOLS = {
+  search_group_messages: ['搜群消息', '按关键词/成员搜本群近几天聊天'],
+  get_ai_news: ['AI 资讯', 'aihot.news 热榜/24h 精选/日报'],
+  send_sticker: ['发表情包', '从 stickers/ 挑表情发到群里'],
+  say_to_group: ['中途发言', '长任务过程中先发一句进度'],
+  ask_chatgpt: ['转问 ChatGPT', '难题/联网/生成文件交给 ChatGPT'],
+  chatgpt_image: ['ChatGPT 生图', '让 ChatGPT 画图并转发'],
+};
+const loaders = { home: () => loadStatus(), agents: () => loadAgents(), usage: () => loadUsage(), convs: () => loadConvs(), logs: () => pollLog(), stickers: () => loadStickers(), config: () => loadConfig(), debug: () => { if (!$('#nodes').children.length) probe(); } };
+function go(page) {
+  $$('.nav').forEach(n => n.classList.toggle('active', n.dataset.page === page));
+  $$('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
+  store.set('page', page);
+  if (location.hash !== '#' + page) history.replaceState(null, '', '#' + page);
+  loaders[page]?.();
+}
+$$('.nav').forEach(n => n.onclick = () => go(n.dataset.page));
+const current = () => $('.nav.active').dataset.page;
+window.addEventListener('hashchange', () => { const p = location.hash.slice(1); if (p in loaders && p !== current()) go(p); });
+
+/* ---------- 主题 ---------- */
+function applyTheme(t) { if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
+applyTheme(store.get('theme', ''));
+$('#themeBtn').onclick = () => {
+  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  const t = dark ? 'light' : 'dark'; applyTheme(t); store.set('theme', t);
+};
+setInterval(() => $('#clock').textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false }), 1000);
+
+/* ---------- 总览 ---------- */
+let lastStatus = null;
+async function loadStatus(manual) {
+  try {
+    const s = await api('/api/status');
+    lastStatus = s; renderStatus(s);
+    $('#nav-convs').textContent = s.total_convs;
+    if (manual) toast('已刷新', 'ok');
+  } catch (e) { toast('状态获取失败：' + e.message, 'bad'); }
+}
+function renderStatus(s) {
+  const b = s.bot, hero = $('#hero');
+  const state = !b.running ? 'stopped' : s.paused ? 'paused' : 'running';
+  hero.className = 'card hero ' + state;
+  $('#hero-pet').src = `/assets/${{ running: 'pet-eat', paused: 'pet-oops', stopped: 'pet-idle' }[state]}.webp`;
+  $('#hero-title').textContent = { running: '大肥鱼正在值班', paused: '大肥鱼已暂停应答', stopped: '大肥鱼没在线' }[state];
+  $('#hero-pill').textContent = { running: '运行中', paused: '已暂停', stopped: '已停止' }[state];
+  $('#hero-meta').innerHTML = b.running
+    ? `<span>PID <b class="mono">${b.pid}</b></span><span>已运行 <b>${fmtDur(b.uptime)}</b></span><span>内存 <b>${b.memory_mb} MB</b></span><span>最近上线 <b>${esc(s.last_online || '–')}</b></span>`
+    : `<span>最近上线 <b>${esc(s.last_online || '从未')}</b></span><span>点击右侧「启动」拉起机器人（需微信已登录且桌面未锁屏）</span>`;
+  $('#hero-actions').innerHTML = b.running
+    ? `<button class="btn" onclick="botAct('restart')"><svg><use href="#i-refresh"/></svg>重启</button><button class="btn solid" onclick="botAct('stop')"><svg><use href="#i-stop"/></svg>停止</button>`
+    : `<button class="btn solid" onclick="botAct('start')"><svg><use href="#i-play"/></svg>启动</button>`;
+  const w = $('#hero-warn');
+  w.hidden = state !== 'paused';
+  w.textContent = '发送失败后机器人为防止乱动键鼠已自动暂停，只听不回。检查微信窗口状态后点「重启」恢复。';
+
+  const t = s.today, u = s.usage_today;
+  const rate = t.questions ? Math.round(t.replied / t.questions * 100) : null;
+  $('#kpis').innerHTML = [
+    ['今日提问', t.questions, '', `累计 ${s.total_convs} 次对话`, 'i-msg', 'c-blue'],
+    ['成功回复', t.replied, rate != null ? `<small>${rate}%</small>` : '', t.failed ? `失败 ${t.failed} 次` : '今日零失败', 'i-check', 'c-green'],
+    ['平均耗时', t.avg_latency ?? '–', t.avg_latency != null ? '<small>秒</small>' : '', t.p_max_latency != null ? `最慢 ${t.p_max_latency}s` : '暂无数据', 'i-clock', 'c-amber'],
+    ['工具调用', t.tool_calls, '', `${s.tools.length} 种工具`, 'i-tool', 'c-pink'],
+    ['今日 Token', fmtTok(u.prompt + u.completion), '', u.calls ? `输入 ${fmtTok(u.prompt)} · 输出 ${fmtTok(u.completion)}` : '还没有调用记录', 'i-coin', 'c-blue'],
+    ['缓存命中率', u.hit_rate ?? '–', u.hit_rate != null ? '<small>%</small>' : '', u.calls ? `命中 ${fmtTok(u.cached)} tokens · ${u.calls} 次调用` : '暂无数据', 'i-bolt', 'c-green'],
+  ].map(([l, v, suf, f, ic, c]) => `<div class="card kpi"><span class="ico ${c}"><svg><use href="#${ic}"/></svg></span><span class="lbl">${l}</span><span class="val">${v}${suf}</span><span class="foot">${f}</span></div>`).join('');
+
+  renderHourly(s.hourly, s.hour_labels);
+  rank('#tools', s.tools, { search_group_messages: '搜索群消息', ask_chatgpt: '转问 ChatGPT', send_sticker: '发表情', say_to_group: '中途发言', get_ai_news: 'AI 资讯', chatgpt_image: 'ChatGPT 生图' });
+  rank('#groups', s.groups); rank('#users', s.users);
+  $('#err-sub').textContent = s.errors.length ? `最近 ${s.errors.length} 条` : '';
+  $('#errors').innerHTML = s.errors.length ? s.errors.map(e => {
+    const cls = e.tag === '!!!' || e.tag === '回调异常' ? 'bad' : 'warn';
+    return `<div class="err" title="${esc(e.body)}"><time class="mono">${esc(e.time)}</time><span class="b"><span class="tag ${cls}">${esc(e.tag)}</span>${esc(e.body)}</span></div>`;
+  }).join('') : empty('praise', '风平浪静，没有异常');
+}
+function renderHourly(data, labels) {
+  const W = 720, H = 200, pad = { l: 26, r: 6, t: 12, b: 24 };
+  const max = Math.max(4, ...data), step = (W - pad.l - pad.r) / data.length, bw = step * .62;
+  const y = v => H - pad.b - v / max * (H - pad.t - pad.b);
+  let g = `<defs><linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>`;
+  for (let i = 0; i <= 4; i++) { const v = Math.round(max / 4 * i), yy = y(v); g += `<line class="grid-line" x1="${pad.l}" x2="${W - pad.r}" y1="${yy}" y2="${yy}"/><text x="${pad.l - 6}" y="${yy + 3.5}" text-anchor="end">${v}</text>`; }
+  data.forEach((v, i) => {
+    const x = pad.l + i * step + (step - bw) / 2, h = Math.max(v ? 3 : 0, H - pad.b - y(v));
+    g += `<rect class="bar" x="${x}" y="${H - pad.b - h}" width="${bw}" height="${h}" rx="3"><title>${labels[i]}:00 · ${v} 次</title></rect>`;
+    if (i % 3 === 0 || i === data.length - 1) g += `<text x="${x + bw / 2}" y="${H - 7}" text-anchor="middle">${labels[i]}</text>`;
+  });
+  $('#hourly').innerHTML = g;
+  $('#hourly-sub').textContent = `共 ${data.reduce((a, b) => a + b, 0)} 次`;
+}
+function rank(sel, rows, names = {}) {
+  const max = Math.max(1, ...rows.map(r => r[1]));
+  $(sel).innerHTML = rows.length ? rows.map(([k, v]) => `<li><span class="name" title="${esc(k)}">${esc(names[k] || k)}</span><span class="num">${v}</span><span class="track"><span class="fill" style="width:${v / max * 100}%"></span></span></li>`).join('') : '<div class="empty">暂无数据</div>';
+}
+async function botAct(act) {
+  const label = { start: '启动', stop: '停止', restart: '重启' }[act];
+  if (act !== 'start' && !confirm(`确定${label}机器人？进行中的回答会被中断。`)) return;
+  $$('#hero-actions .btn').forEach(b => { b.disabled = true; });
+  $('#hero-actions .btn:last-child').innerHTML = `<span class="spin"></span>${label}中…`;
+  try { await api('/api/bot/' + act, {}); toast(`已${label}`, 'ok'); }
+  catch (e) { toast(`${label}失败：${e.message}`, 'bad'); }
+  setTimeout(loadStatus, 600);
+}
+
+/* ---------- 对话 ---------- */
+let convTimer;
+$('#convQ').oninput = () => { clearTimeout(convTimer); convTimer = setTimeout(loadConvs, 250); };
+$('#convFilter').onchange = () => loadConvs();
+$('#convAgent').onchange = () => loadConvs();
+async function loadConvs() {
+  const box = $('#convs');
+  if (!box.children.length) box.innerHTML = '<div class="card skeleton" style="height:120px"></div>'.repeat(3);
+  try {
+    let list = await api('/api/conversations?q=' + encodeURIComponent($('#convQ').value));
+    const f = $('#convFilter').value; if (f) list = list.filter(c => c.status === f);
+    const ag = $('#convAgent').value; if (ag) list = list.filter(c => (c.agent || '未分配') === ag);
+    const names = [...new Set((await api('/api/conversations')).map(c => c.agent || '未分配'))];
+    const sel = $('#convAgent'), cur = sel.value;
+    sel.innerHTML = '<option value="">全部 Agent</option>' + names.map(n => `<option${n === cur ? ' selected' : ''}>${esc(n)}</option>`).join('');
+    const searching = $('#convQ').value.trim() || f || ag;
+    box.innerHTML = list.length ? list.map(convHTML).join('')
+      : `<div class="card">${searching ? empty('question', '没有匹配的对话，换个关键词试试') : empty('hungry', '还没人 @ 我……饿饿，饭饭', true)}</div>`;
+  } catch (e) { box.innerHTML = `<div class="card">${empty('cry', '加载失败：' + esc(e.message))}</div>`; }
+}
+function convHTML(c) {
+  const st = { ok: ['ok', '已回复'], fail: ['bad', '失败'], pending: ['info', '处理中'] }[c.status];
+  const q = c.question.replace(/^@\S+[    ]*/, '');
+  const steps = c.steps.length ? `<details class="steps"><summary>处理过程 · ${c.steps.length} 步</summary><ul class="tl">${c.steps.map(s => `<li><time class="mono">${s.time}</time><span class="tag ${s.tag === '!!!' ? 'bad' : /失败/.test(s.body) ? 'warn' : 'info'}">${esc(s.tag)}</span>${esc(s.body)}</li>`).join('')}</ul></details>` : '';
+  return `<div class="card conv">
+    <div class="conv-top"><span class="avatar" style="background:hsl(${hue(c.who)} 65% 52%)">${esc(initial(c.who))}</span>
+      <span class="who" title="${esc(c.who)}">${esc(c.who)}</span><span>在 ${esc(c.group)}</span>${c.agent ? `<span class="tag info">🐟 ${esc(c.agent)}</span>` : ''}
+      <span class="right"><span class="tag ${st[0]}">${st[1]}</span>${c.latency != null ? `<span class="tag info">${c.latency}s</span>` : ''}<time class="mono">${esc(c.time.slice(5))}</time></span></div>
+    <div class="bubble q">${esc(q)}</div>
+    ${c.answer != null ? `<div class="bubble a"><span class="lbl">🐟 ${esc(c.agent || '大肥鱼')}</span>${esc(c.answer) || '<i style="color:var(--text-3)">（只发了表情/媒体）</i>'}</div>` : ''}
+    ${steps}</div>`;
+}
+
+/* ---------- 日志 ---------- */
+let logOffset = -1, logLines = [], logFilter = 'all', logTimer = null;
+const ERR_RE = /\[(!!!|回调异常|llm)\]|失败|Traceback|Error|异常/;
+function classify(line) {
+  if (/^\d{4}-\d{2}-\d{2} /.test(line)) return 'lib';
+  const m = line.match(/^\[[\d\- :]+\] \[([^\]]+)\]/);
+  if (ERR_RE.test(line)) return 'err';
+  if (/已上线/.test(line)) return 'online';
+  return m ? m[1] : '';
+}
+function lineHTML(line) {
+  const k = classify(line);
+  const m = line.match(/^(\[[\d\- :]+\]) ?(.*)$/);
+  const body = m ? `<span class="ts">${esc(m[1])}</span> ${esc(m[2])}` : esc(line);
+  return `<span class="t-${k}">${body}</span>`;
+}
+function passes(line) {
+  const k = classify(line);
+  switch (logFilter) {
+    case 'conv': return k === '收到' || k === '回复';
+    case 'tool': return ['工具', '表情', 'say', 'ChatGPT', 'agent'].includes(k);
+    case 'err': return k === 'err';
+    case 'nolib': return k !== 'lib';
+    default: return true;
+  }
+}
+function renderLog() {
+  const pre = $('#log');
+  pre.innerHTML = logLines.filter(passes).slice(-2000).map(lineHTML).join('\n');
+  if ($('#follow').checked) pre.scrollTop = pre.scrollHeight;
+}
+async function pollLog() {
+  clearTimeout(logTimer);
+  if (current() !== 'logs') return;
+  try {
+    const r = await api('/api/logs?offset=' + logOffset);
+    if (r.reset) logLines = [];
+    if (r.text) {
+      const add = r.text.split('\n'); if (add[add.length - 1] === '') add.pop();
+      logLines.push(...add); if (logLines.length > 5000) logLines = logLines.slice(-5000);
+      renderLog();
+    }
+    logOffset = r.offset;
+  } catch {}
+  logTimer = setTimeout(pollLog, 1500);
+}
+$$('.term-bar .chip[data-f]').forEach(c => c.onclick = () => {
+  $$('.term-bar .chip[data-f]').forEach(x => x.classList.toggle('on', x === c));
+  logFilter = c.dataset.f; renderLog();
+});
+$('#logClear').onclick = () => { logLines = []; renderLog(); };
+
+/* ---------- 表情包 ---------- */
+async function loadStickers() {
+  const box = $('#stickers');
+  try {
+    const list = await api('/api/stickers');
+    $('#nav-stk').textContent = list.length;
+    box.innerHTML = list.map(s => `<div class="card stk" data-file="${esc(s.file)}">
+      <div class="img"><span class="badge">${esc(s.file.split('.').pop())}</span>${s.used ? `<span class="used">用过 ${s.used} 次</span>` : ''}
+        <img src="/stickers/${encodeURIComponent(s.file)}?t=${s.mtime}" alt="${esc(s.name)}"></div>
+      <div class="body"><div class="nm" title="${esc(s.name)}">${esc(s.name)}</div>
+        <div class="row"><span>${fmtSize(s.size)}</span><span class="ops">
+          <button class="icon-btn" title="重命名" onclick="renameStk(this)"><svg><use href="#i-edit"/></svg></button>
+          <button class="icon-btn del" title="删除" onclick="delStk(this)"><svg><use href="#i-trash"/></svg></button></span></div></div></div>`).join('')
+      || `<div class="card" style="grid-column:1/-1">${empty('question', '还没有表情，拖几张进来吧')}</div>`;
+  } catch (e) { toast('表情加载失败：' + e.message, 'bad'); }
+}
+function renameStk(btn) {
+  const card = btn.closest('.stk'), nm = $('.nm', card), old = nm.textContent;
+  nm.contentEditable = 'true'; nm.focus();
+  document.getSelection().selectAllChildren(nm);
+  const done = async ok => {
+    nm.contentEditable = 'false'; nm.onblur = nm.onkeydown = null;
+    const name = nm.textContent.trim();
+    if (!ok || !name || name === old) { nm.textContent = old; return; }
+    try { await api('/api/stickers/rename', { file: card.dataset.file, name }); toast('已重命名', 'ok'); loadStickers(); }
+    catch (e) { nm.textContent = old; toast(e.message, 'bad'); }
+  };
+  nm.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); done(true); } if (e.key === 'Escape') done(false); };
+  nm.onblur = () => done(true);
+}
+async function delStk(btn) {
+  const f = btn.closest('.stk').dataset.file;
+  if (!confirm(`删除表情「${f}」？文件会从 stickers/ 目录移除。`)) return;
+  try { await api('/api/stickers/delete', { file: f }); toast('已删除', 'ok'); loadStickers(); }
+  catch (e) { toast(e.message, 'bad'); }
+}
+async function upload(files) {
+  for (const f of files) {
+    const data = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); });
+    try { await api('/api/stickers/upload', { file: f.name, data }); toast(`已上传 ${f.name}`, 'ok'); }
+    catch (e) {
+      if (/已存在/.test(e.message) && confirm(`${f.name} 已存在，覆盖吗？`)) {
+        try { await api('/api/stickers/upload', { file: f.name, data, overwrite: true }); toast(`已覆盖 ${f.name}`, 'ok'); } catch (e2) { toast(e2.message, 'bad'); }
+      } else toast(`${f.name}：${e.message}`, 'bad');
+    }
+  }
+  loadStickers();
+}
+const drop = $('#drop');
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => upload([...e.dataTransfer.files]));
+$('#fileIn').onchange = e => { upload([...e.target.files]); e.target.value = ''; };
+
+/* ---------- 配置 ---------- */
+let cfg = {}, hosts = [], dirty = false;
+function markDirty(v = true) { dirty = v; $('#saveMsg').innerHTML = v ? '<span class="dirty">● 有未保存的修改</span>' : '修改后点保存，重启机器人生效'; }
+function renderHosts() {
+  $$('#hosts .chip-i').forEach(c => c.remove());
+  hosts.forEach((h, i) => {
+    const c = document.createElement('span'); c.className = 'chip-i mono';
+    c.innerHTML = `<span class="n">#${i + 1}</span>${esc(h)}<button type="button" title="移除">×</button>`;
+    $('button', c).onclick = () => { hosts.splice(i, 1); renderHosts(); markDirty(); };
+    $('#hostIn').before(c);
+  });
+}
+$('#hostIn').onkeydown = e => {
+  const v = e.target.value.trim();
+  if ((e.key === 'Enter' || e.key === ',') && v) { e.preventDefault(); hosts.push(...v.split(/[,\s]+/).filter(Boolean)); e.target.value = ''; renderHosts(); markDirty(); }
+  if (e.key === 'Backspace' && !v && hosts.length) { hosts.pop(); renderHosts(); markDirty(); }
+};
+$('#hosts').onclick = () => $('#hostIn').focus();
+$$('#page-config [data-k]').forEach(el => el.addEventListener('input', () => { markDirty(); if (el.dataset.k === 'SYSTEM_PROMPT') promptStat(); }));
+function promptStat() {
+  const t = $('[data-k=SYSTEM_PROMPT]').value, cjk = (t.match(/[一-鿿]/g) || []).length;
+  $('#promptStat').textContent = `${t.length} 字 · 约 ${cjk + Math.floor((t.length - cjk) / 3)} tokens`;
+}
+async function loadConfig() {
+  try {
+    const r = await api('/api/config'); cfg = r.config; hosts = [...(cfg.API_HOSTS || [])];
+    $$('#page-config [data-k]').forEach(el => el.value = cfg[el.dataset.k] ?? '');
+    renderHosts(); promptStat(); markDirty(false);
+    $('#bn-model').textContent = '模型 ' + cfg.MODEL; $('#bn-nodes').textContent = hosts.length + ' 个节点'; $('#bn-at').textContent = '@' + cfg.AT_NAME;
+    if (!r.file_exists) $('#saveMsg').textContent = '当前显示的是脚本默认值 + start_bot.cmd 环境变量，保存后生成 bot_config.json';
+  } catch (e) { toast('配置加载失败：' + e.message, 'bad'); }
+}
+async function saveConfig(restart) {
+  const pending = $('#hostIn').value.trim();
+  if (pending) { hosts.push(...pending.split(/[,\s]+/).filter(Boolean)); $('#hostIn').value = ''; renderHosts(); }
+  if (!hosts.length) return toast('至少需要一个 LLM 节点', 'bad');
+  const body = { API_HOSTS: hosts };
+  $$('#page-config [data-k]').forEach(el => body[el.dataset.k] = el.value);
+  try {
+    await api('/api/config', body); markDirty(false); toast('配置已保存', 'ok');
+    if (restart) {
+      const st = await api('/api/status');
+      if (st.bot.running) { await api('/api/bot/restart', {}); toast('机器人已重启，新配置生效', 'ok'); }
+      else toast('机器人没在运行，下次启动时生效');
+    }
+  } catch (e) { toast('保存失败：' + e.message, 'bad'); }
+}
+function togglePw(btn) { const i = btn.previousElementSibling; i.type = i.type === 'password' ? 'text' : 'password'; }
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+/* ---------- 调试 ---------- */
+async function probe() {
+  const btn = $('#probeBtn'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span>探测中…';
+  $('#nodes').innerHTML = '<tr><td colspan="4"><div class="skeleton" style="height:90px"></div></td></tr>';
+  try {
+    const rows = await api('/api/nodes');
+    $('#nodes').innerHTML = rows.map(n => `<tr><td class="mono">${esc(n.host)}</td>
+      <td>${n.ok ? '<span class="tag ok">在线</span>' : `<span class="tag bad" title="${esc(n.error)}">离线</span>`}</td>
+      <td>${n.ok ? `<span class="lat"><span class="bar"><i style="width:${Math.min(100, n.ms / 10)}%;background:${n.ms < 200 ? 'var(--ok)' : n.ms < 800 ? 'var(--warn)' : 'var(--bad)'}"></i></span><span class="mono">${n.ms}ms</span></span>` : '–'}</td>
+      <td>${n.ok ? (n.has_model ? '<span class="tag ok">已加载</span>' : `<span class="tag warn" title="${esc(n.models.join(', '))}">无此模型</span>`) : `<span style="color:var(--text-3);font-size:12px">${esc(n.error.slice(0, 40))}</span>`}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="empty">没有配置节点</td></tr>';
+  } catch (e) { $('#nodes').innerHTML = `<tr><td colspan="4">${empty('cry', esc(e.message))}</td></tr>`; }
+  btn.disabled = false; btn.innerHTML = '<svg><use href="#i-refresh"/></svg>重新探测';
+}
+async function runTest() {
+  const btn = $('#testBtn'), out = $('#testOut');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>思考中';
+  out.textContent = '正在跑完整链路（提示词 + 工具），可能要几十秒…';
+  try {
+    const r = await api('/api/test', { question: $('#testQ').value, agent: $('#testAgent').value });
+    out.textContent = `[${r.ok ? '成功' : '失败'} · ${r.seconds}s]\n\n` + r.output;
+  } catch (e) { out.innerHTML = empty('cry', '请求失败：' + esc(e.message)); }
+  btn.disabled = false; btn.innerHTML = '<svg><use href="#i-play"/></svg>发送';
+}
+$('#testQ').onkeydown = e => { if (e.key === 'Enter') runTest(); };
+
+/* ---------- Agent ---------- */
+let agents = [], agentDefaults = {}, chats = [], agentTools = [], editing = -1, dlgGroups = [];
+const agColor = a => `hsl(${hue(a.id + a.name)} 70% 52%)`;
+const chatName = g => g === '*' ? '所有未绑定的群' : (chats.find(c => c.id === g)?.name || g);
+async function loadAgents() {
+  try {
+    const [r, c, u, st] = await Promise.all([api('/api/agents'), api('/api/chats'), api('/api/usage?days=1'), api('/api/status')]);
+    agents = r.agents; agentDefaults = r.defaults; agentTools = r.tools; chats = c;
+    $('#nav-agents').textContent = agents.length;
+    fillAgentSelect();
+    const conv = Object.fromEntries(st.agents_today), use = Object.fromEntries(u.by_agent.map(a => [a.key, a]));
+    $('#agents').innerHTML = agents.map((a, i) => {
+      const us = use[a.id] || {}, groups = a.groups.length ? a.groups : [];
+      return `<div class="card agent-card${a.enabled ? '' : ' off'}" style="--ag:${agColor(a)}">
+        <div class="ag-top"><span class="ag-ava">${esc(initial(a.name))}</span>
+          <div class="t"><b>${esc(a.name)}</b><small>@${esc(a.at_name || agentDefaults.AT_NAME)} · ${esc(a.model || agentDefaults.MODEL)}</small></div>
+          <label class="switch" title="${a.enabled ? '停用' : '启用'}"><input type="checkbox" ${a.enabled ? 'checked' : ''} onchange="toggleAgent(${i}, this.checked)"><i></i></label></div>
+        <div class="ag-groups">${groups.map(g => `<span class="gchip${g === '*' ? ' star' : ''}" title="${esc(g)}">${g === '*' ? '★ ' : '# '}${esc(chatName(g))}</span>`).join('') || '<span class="gchip" style="color:var(--warn)">还没绑定群，不会回答任何消息</span>'}</div>
+        <div class="ag-stats"><div><span>今日提问</span><b>${conv[a.name] || 0}</b></div><div><span>今日 Token</span><b>${fmtTok((us.prompt || 0) + (us.completion || 0))}</b></div><div><span>缓存命中</span><b>${us.hit_rate != null ? us.hit_rate + '%' : '–'}</b></div></div>
+        <div class="ag-meta"><span>🛠 ${a.tools.length}/${agentTools.length} 个工具</span><span>🌡 ${a.temperature === '' ? 0.7 : a.temperature}</span><span>✏️ ${a.system_prompt ? '自定义人设 ' + a.system_prompt.length + ' 字' : '全局人设'}</span></div>
+        <div class="ag-ops"><button class="btn sm" onclick="editAgent(${i})"><svg><use href="#i-edit"/></svg>编辑</button>
+          <button class="btn sm" onclick="testAgent('${esc(a.id)}')"><svg><use href="#i-play"/></svg>测试</button>
+          <button class="btn sm danger" style="margin-left:auto" onclick="delAgent(${i})"><svg><use href="#i-trash"/></svg></button></div></div>`;
+    }).join('') + `<div class="card ag-new" onclick="editAgent(-1)"><div><img src="/assets/wave.webp" alt=""><b>新建 Agent</b><br><small>给另一个群配一条新的鱼</small></div></div>`;
+  } catch (e) { $('#agents').innerHTML = `<div class="card">${empty('cry', '加载失败：' + esc(e.message))}</div>`; }
+}
+function fillAgentSelect() {
+  const sel = $('#testAgent'), cur = sel.value;
+  sel.innerHTML = agents.map(a => `<option value="${esc(a.id)}"${a.id === cur ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
+}
+async function persistAgents(list, msg) {
+  try { const r = await api('/api/agents', { agents: list }); agents = r.agents; toast(msg || '已保存，机器人会自动热加载', 'ok'); loadAgents(); return true; }
+  catch (e) { toast(e.message, 'bad'); loadAgents(); return false; }
+}
+function toggleAgent(i, on) { const l = structuredClone(agents); l[i].enabled = on; persistAgents(l, on ? `已启用「${l[i].name}」` : `已停用「${l[i].name}」`); }
+function delAgent(i) {
+  if (agents.length === 1) return toast('至少保留一个 Agent', 'bad');
+  if (!confirm(`删除 Agent「${agents[i].name}」？它绑定的群将交给兜底 Agent（没有兜底就不再回答）。`)) return;
+  const l = structuredClone(agents); l.splice(i, 1); persistAgents(l, '已删除');
+}
+function testAgent(id) { go('debug'); fillAgentSelect(); $('#testAgent').value = id; $('#testQ').focus(); }
+function renderDlgGroups() {
+  $$('#f-groups .chip-i').forEach(c => c.remove());
+  dlgGroups.filter(g => g !== '*').forEach(g => {
+    const c = document.createElement('span'); c.className = 'chip-i';
+    c.innerHTML = `${esc(chatName(g))}<button type="button" title="移除">×</button>`; c.title = g;
+    $('button', c).onclick = () => { dlgGroups = dlgGroups.filter(x => x !== g); renderDlgGroups(); };
+    $('#f-groupIn').before(c);
+  });
+  const taken = new Set(agents.filter((a, i) => i !== editing).flatMap(a => a.groups));
+  const sug = chats.filter(c => c.group && !dlgGroups.includes(c.id || c.name) && !dlgGroups.includes(c.name) && !taken.has(c.id) && !taken.has(c.name)).slice(0, 10);
+  $('#f-suggest').innerHTML = sug.map(c => `<button type="button" data-g="${esc(c.id || c.name)}">+ ${esc(c.name)}</button>`).join('');
+  $$('#f-suggest button').forEach(b => b.onclick = () => { dlgGroups.push(b.dataset.g); renderDlgGroups(); });
+}
+function addGroupFromInput() {
+  const v = $('#f-groupIn').value.trim(); if (!v) return;
+  const hit = chats.find(c => c.name === v || c.id === v);
+  const g = hit ? (hit.id || hit.name) : v;
+  if (!dlgGroups.includes(g)) dlgGroups.push(g);
+  $('#f-groupIn').value = ''; renderDlgGroups();
+}
+$('#f-groupIn').onkeydown = e => {
+  if (e.key === 'Enter') { e.preventDefault(); addGroupFromInput(); }
+  if (e.key === 'Backspace' && !e.target.value) { const l = dlgGroups.filter(g => g !== '*'); if (l.length) { dlgGroups = dlgGroups.filter(g => g !== l[l.length - 1]); renderDlgGroups(); } }
+};
+$('#f-groupIn').onchange = addGroupFromInput;
+$('#f-groups').onclick = () => $('#f-groupIn').focus();
+$('#f-name').oninput = e => $('#dlgAva').textContent = initial(e.target.value || '鱼');
+function editAgent(i) {
+  editing = i;
+  const a = i >= 0 ? agents[i] : { id: '', name: '', enabled: true, at_name: '', groups: [], system_prompt: '', model: '', temperature: '', max_tokens: '', recent_n: '', tools: [...agentTools] };
+  $('#dlgTitle').textContent = i >= 0 ? `编辑「${a.name}」` : '新建 Agent';
+  $('#dlgAva').textContent = initial(a.name || '鱼'); $('#dlgAva').style.background = agColor({ id: a.id || 'new', name: a.name });
+  $('#f-name').value = a.name; $('#f-at').value = a.at_name; $('#f-at').placeholder = agentDefaults.AT_NAME;
+  $('#f-enabled').checked = a.enabled !== false; $('#f-prompt').value = a.system_prompt;
+  $('#f-model').value = a.model; $('#f-model').placeholder = agentDefaults.MODEL;
+  $('#f-temp').value = a.temperature ?? ''; $('#f-maxtok').value = a.max_tokens ?? ''; $('#f-maxtok').placeholder = agentDefaults.MAX_TOKENS;
+  $('#f-recent').value = a.recent_n ?? ''; $('#f-recent').placeholder = agentDefaults.RECENT_N;
+  $('#f-fallback').checked = a.groups.includes('*');
+  dlgGroups = [...a.groups];
+  $('#chatList').innerHTML = chats.map(c => `<option value="${esc(c.name)}">${esc(c.id)}</option>`).join('');
+  $('#f-tools').innerHTML = agentTools.map(t => `<label class="tool-opt"><input type="checkbox" value="${t}" ${a.tools.includes(t) ? 'checked' : ''}><span>${AG_TOOLS[t]?.[0] || t}<small>${AG_TOOLS[t]?.[1] || ''}</small></span></label>`).join('');
+  renderDlgGroups();
+  $('#agentDlg').showModal();
+}
+async function copyGlobalPrompt() {
+  if ($('#f-prompt').value.trim() && !confirm('覆盖当前填写的人设？')) return;
+  try { $('#f-prompt').value = (await api('/api/config')).config.SYSTEM_PROMPT || ''; } catch (e) { toast(e.message, 'bad'); }
+}
+async function saveAgentDlg() {
+  if ($('#f-groupIn').value.trim()) addGroupFromInput();
+  const name = $('#f-name').value.trim(); if (!name) return toast('给 Agent 起个名字', 'bad');
+  let groups = dlgGroups.filter(g => g !== '*'); if ($('#f-fallback').checked) groups.push('*');
+  const a = { ...(editing >= 0 ? agents[editing] : {}), name, enabled: $('#f-enabled').checked, at_name: $('#f-at').value.trim(), groups,
+    system_prompt: $('#f-prompt').value, model: $('#f-model').value.trim(), temperature: $('#f-temp').value, max_tokens: $('#f-maxtok').value,
+    recent_n: $('#f-recent').value, tools: $$('#f-tools input:checked').map(x => x.value) };
+  const l = structuredClone(agents);
+  if (editing >= 0) l[editing] = a; else l.push(a);
+  if (await persistAgents(l, editing >= 0 ? '已保存，机器人会自动热加载' : `已创建「${name}」`)) $('#agentDlg').close();
+}
+
+/* ---------- 用量 ---------- */
+let useDays = Number(store.get('useDays', 7)), useData = null;
+$$('#useDays button').forEach(b => { b.classList.toggle('on', +b.dataset.d === useDays); b.onclick = () => { useDays = +b.dataset.d; store.set('useDays', useDays); $$('#useDays button').forEach(x => x.classList.toggle('on', x === b)); loadUsage(); }; });
+async function loadUsage() {
+  try { useData = await api('/api/usage?days=' + useDays); renderUsage(useData); }
+  catch (e) { $('#useKpis').innerHTML = `<div class="card">${empty('cry', '加载失败：' + esc(e.message))}</div>`; }
+}
+function useTable(rows, keyLabel, keyFn) {
+  if (!rows.length) return empty('hungry', '还没有调用记录');
+  const maxT = Math.max(1, ...rows.map(r => r.prompt + r.completion));
+  return `<table class="tbl"><thead><tr><th>${keyLabel}</th><th class="r">调用</th><th class="r">输入</th><th class="r">输出</th><th>缓存命中</th><th class="r">平均耗时</th></tr></thead><tbody>${rows.map(r =>
+    `<tr><td class="nm" title="${esc(r.key)}">${keyFn ? keyFn(r) : esc(r.key)}</td><td class="r">${r.calls}</td><td class="r">${fmtTok(r.prompt)}</td><td class="r">${fmtTok(r.completion)}</td>
+     <td><span class="hitbar"><span><i style="width:${r.hit_rate || 0}%"></i></span>${r.hit_rate ?? '–'}%</span></td><td class="r">${r.avg_secs ?? '–'}s</td></tr>`).join('')}</tbody></table>`;
+}
+function renderUsage(d) {
+  const t = d.total, est = d.estimated && !d.server_reported;
+  const span = { 1: '今日', 7: '近 7 天', 30: '近 30 天' }[d.days] || `近 ${d.days} 天`;
+  $('#useKpis').innerHTML = [
+    ['总 Token', fmtTok(t.prompt + t.completion), '', `${span} · ${t.calls} 次调用`, 'i-coin', 'c-blue'],
+    ['输入 Token', fmtTok(t.prompt), '', t.calls ? `平均每次 ${fmtTok(Math.round(t.prompt / t.calls))}` : '–', 'i-msg', 'c-blue'],
+    ['输出 Token', fmtTok(t.completion), '', t.calls ? `平均每次 ${fmtTok(Math.round(t.completion / t.calls))}` : '–', 'i-chat', 'c-amber'],
+    ['平均耗时', t.avg_secs ?? '–', t.avg_secs != null ? '<small>秒/次</small>' : '', '单次 LLM 请求', 'i-clock', 'c-pink'],
+  ].map(([l, v, suf, f, ic, c]) => `<div class="card kpi"><span class="ico ${c}"><svg><use href="#${ic}"/></svg></span><span class="lbl">${l}</span><span class="val">${v}${suf}</span><span class="foot">${f}</span></div>`).join('')
+  + `<div class="card kpi has-ring"><span class="ring" style="--p:${t.hit_rate || 0}"></span><span class="lbl">缓存命中率${est ? ' <span class="tag warn" title="服务端未返回 cached_tokens，按请求公共前缀估算">估算</span>' : ''}</span><span class="val">${t.hit_rate ?? '–'}${t.hit_rate != null ? '<small>%</small>' : ''}</span><span class="foot">命中 ${fmtTok(t.cached)} / ${fmtTok(t.prompt)}</span></div>`;
+
+  const series = d.days === 1 ? d.hourly.map((h, i) => ({ label: String(i).padStart(2, '0'), ...h })) : d.daily;
+  $('#useTitle').textContent = d.days === 1 ? '今日每小时 Token' : '每日 Token';
+  renderStack(series);
+  renderHitLine(series);
+  $('#hitSub').textContent = est ? '估算值' : d.server_reported ? '服务端上报' : '';
+  $('#useTable').innerHTML = `<table class="tbl"><thead><tr><th>${d.days === 1 ? '时段' : '日期'}</th><th class="r">调用</th><th class="r">缓存命中</th><th class="r">未命中</th><th class="r">输出</th><th class="r">命中率</th></tr></thead><tbody>${series.map(r =>
+    `<tr><td>${r.label}</td><td class="r">${r.calls}</td><td class="r">${r.cached}</td><td class="r">${r.prompt - r.cached}</td><td class="r">${r.completion}</td><td class="r">${r.hit_rate ?? '–'}${r.hit_rate != null ? '%' : ''}</td></tr>`).join('')}</tbody></table>`;
+  $('#byAgent').innerHTML = useTable(d.by_agent, 'Agent', r => esc(r.name));
+  $('#byChat').innerHTML = useTable(d.by_chat, '群聊');
+  $('#byHost').innerHTML = d.by_host.length ? `<table class="tbl"><thead><tr><th>节点</th><th class="r">调用</th><th>缓存命中</th></tr></thead><tbody>${d.by_host.map(r =>
+    `<tr><td class="mono">${esc(r.key)}</td><td class="r">${r.calls}</td><td><span class="hitbar"><span><i style="width:${r.hit_rate || 0}%"></i></span>${r.hit_rate ?? '–'}%</span></td></tr>`).join('')}</tbody></table>
+    <p style="font-size:12px;color:var(--text-3);margin:12px 0 0">机器人粘住一台节点用，切节点会让前缀缓存全部失效——命中率突降时先看这里有没有频繁切换。</p>` : empty('hungry', '暂无');
+  $('#useRecent').innerHTML = d.recent.length ? `<table class="tbl"><thead><tr><th>时间</th><th>Agent</th><th>群聊</th><th>类型</th><th>节点</th><th class="r">输入</th><th class="r">命中</th><th class="r">输出</th><th class="r">耗时</th></tr></thead><tbody>${d.recent.map(r =>
+    `<tr><td class="mono">${r.time}</td><td>${esc(r.agent_name || '–')}</td><td class="nm">${esc(r.chat_name || '–')}</td><td><span class="tag ${r.kind === 'summary' ? 'warn' : 'info'}">${r.kind === 'summary' ? '记忆压缩' : '对话'}</span></td><td class="mono">${esc(r.host)}</td>
+     <td class="r">${r.prompt}</td><td class="r">${r.cached}${r.prompt ? ` <small style="color:var(--text-3)">${Math.round(r.cached / r.prompt * 100)}%</small>` : ''}</td><td class="r">${r.completion}</td><td class="r">${r.secs}s</td></tr>`).join('')}</tbody></table>` : empty('hungry', '还没有调用记录，@ 一下大肥鱼就有了');
+}
+let useResize;
+window.addEventListener('resize', () => { clearTimeout(useResize); useResize = setTimeout(() => { if (current() === 'usage' && useData) renderUsage(useData); }, 150); });
+function toggleUseTable() { $('#useTable').hidden = !$('#useTable').hidden; }
+function niceMax(v) { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)), n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
+function showTip(tip, wrap, evt, html) {
+  tip.innerHTML = html; tip.style.opacity = 1;
+  const r = wrap.getBoundingClientRect(), x = evt.clientX - r.left, y = evt.clientY - r.top;
+  tip.style.left = Math.min(x + 14, r.width - tip.offsetWidth - 4) + 'px'; tip.style.top = Math.max(0, y - tip.offsetHeight - 10) + 'px';
+}
+function renderStack(rows) {
+  const svg = $('#useBars'), W = svg.clientWidth || 900, H = 230;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); const pad = { l: 44, r: 8, t: 12, b: 24 }, GAP = 2;
+  const max = niceMax(Math.max(...rows.map(r => r.prompt + r.completion)));
+  const y = v => H - pad.b - v / max * (H - pad.t - pad.b);
+  const step = (W - pad.l - pad.r) / rows.length, bw = Math.min(46, step * .62);
+  let g = '';
+  for (let i = 0; i <= 4; i++) { const v = max / 4 * i, yy = y(v); g += `<line class="gl" x1="${pad.l}" x2="${W - pad.r}" y1="${yy}" y2="${yy}"/><text x="${pad.l - 6}" y="${yy + 3.5}" text-anchor="end">${fmtTok(v)}</text>`; }
+  const every = Math.ceil(rows.length / 12);
+  rows.forEach((r, i) => {
+    const x = pad.l + i * step + (step - bw) / 2;
+    const segs = [['--s-hit', r.cached], ['--s-miss', r.prompt - r.cached], ['--s-out', r.completion]].filter(s => s[1] > 0);
+    let acc = 0, out = '';
+    segs.forEach(([c, v], k) => {
+      const y0 = y(acc), y1 = y(acc + v), last = k === segs.length - 1;
+      const hh = Math.max(1, y0 - y1 - (last ? 0 : GAP));        // 段间留 2px 面板色缝
+      out += last && hh > 4 ? `<path class="seg-r" fill="var(${c})" d="M${x},${y0} V${y0 - hh + 4} q0,-4 4,-4 H${x + bw - 4} q4,0 4,4 V${y0} z"/>`
+                            : `<rect class="seg-r" fill="var(${c})" x="${x}" y="${y0 - hh}" width="${bw}" height="${hh}"/>`;
+      acc += v;
+    });
+    g += `<g class="col" data-i="${i}">${out}<rect class="hit" x="${pad.l + i * step}" y="${pad.t}" width="${step}" height="${H - pad.t - pad.b}"/></g>`;
+    if (i % every === 0 || i === rows.length - 1) g += `<text x="${x + bw / 2}" y="${H - 7}" text-anchor="middle">${r.label}</text>`;
+  });
+  svg.innerHTML = g;
+  const wrap = svg.parentNode, tip = $('#useTip');
+  $$('.col', svg).forEach(c => {
+    c.onmousemove = e => { const r = rows[c.dataset.i];
+      showTip(tip, wrap, e, `<b>${r.label}${$('#useTitle').textContent.includes('小时') ? ':00' : ''} · ${r.calls} 次调用</b>
+        <div><span><i style="background:var(--s-hit)"></i>缓存命中</span><span>${r.cached.toLocaleString()}</span></div>
+        <div><span><i style="background:var(--s-miss)"></i>未命中</span><span>${(r.prompt - r.cached).toLocaleString()}</span></div>
+        <div><span><i style="background:var(--s-out)"></i>输出</span><span>${r.completion.toLocaleString()}</span></div>
+        <div><span>命中率</span><span>${r.hit_rate ?? '–'}${r.hit_rate != null ? '%' : ''}</span></div>`); };
+    c.onmouseleave = () => tip.style.opacity = 0;
+  });
+}
+function renderHitLine(rows) {
+  const svg = $('#useHit'), W = svg.clientWidth || 900, H = svg.clientHeight || 200;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); const pad = { l: 52, r: 26, t: 14, b: 24 };
+  const y = v => H - pad.b - v / 100 * (H - pad.t - pad.b);
+  const step = (W - pad.l - pad.r) / Math.max(1, rows.length - 1);
+  const xs = i => rows.length === 1 ? (W + pad.l - pad.r) / 2 : pad.l + i * step;
+  let g = '';
+  [0, 25, 50, 75, 100].forEach(v => g += `<line class="gl" x1="${pad.l}" x2="${W - pad.r}" y1="${y(v)}" y2="${y(v)}"/><text x="${pad.l - 6}" y="${y(v) + 3.5}" text-anchor="end">${v}%</text>`);
+  // 没有调用的时段断开，不画成 0
+  let path = '', pen = false;
+  rows.forEach((r, i) => { if (r.hit_rate == null) { pen = false; return; } path += `${pen ? 'L' : 'M'}${xs(i)},${y(r.hit_rate)} `; pen = true; });
+  g += `<path d="${path}" fill="none" stroke="var(--s-line)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+  const every = Math.ceil(rows.length / 12);
+  rows.forEach((r, i) => {
+    if (r.hit_rate != null && (rows.length <= 31)) g += `<circle cx="${xs(i)}" cy="${y(r.hit_rate)}" r="4" fill="var(--s-line)" stroke="var(--panel)" stroke-width="2"/>`;
+    if (i % every === 0 || i === rows.length - 1) g += `<text x="${xs(i)}" y="${H - 7}" text-anchor="middle">${r.label}</text>`;
+    g += `<rect class="hit" data-i="${i}" x="${xs(i) - step / 2}" y="${pad.t}" width="${Math.max(step, 8)}" height="${H - pad.t - pad.b}"/>`;
+  });
+  svg.innerHTML = g;
+  const wrap = svg.parentNode, tip = $('#hitTip');
+  $$('.hit', svg).forEach(c => {
+    c.onmousemove = e => { const r = rows[c.dataset.i];
+      showTip(tip, wrap, e, `<b>${r.label}</b><div><span>命中率</span><span>${r.hit_rate ?? '无调用'}${r.hit_rate != null ? '%' : ''}</span></div><div><span>命中 / 输入</span><span>${fmtTok(r.cached)} / ${fmtTok(r.prompt)}</span></div>`); };
+    c.onmouseleave = () => tip.style.opacity = 0;
+  });
+}
+
+/* ---------- 启动 ---------- */
+go((location.hash.slice(1) in loaders) ? location.hash.slice(1) : store.get('page', 'home'));
+if (current() !== 'home') loadStatus();
+setInterval(() => { if (current() === 'home' && !document.hidden) loadStatus(); }, 5000);
+api('/api/stickers').then(l => $('#nav-stk').textContent = l.length).catch(() => {});
+api('/api/agents').then(r => { agents = r.agents; agentDefaults = r.defaults; agentTools = r.tools; $('#nav-agents').textContent = agents.length; fillAgentSelect(); }).catch(() => {});
+</script>
+</body>
+</html>

@@ -5,7 +5,6 @@ __pycache__/
 build/
 dist/
 .venv/
-
 # 运行产物（含个人聊天数据，绝不入库）
 *.log
 dafeiyu_bot.log*
@@ -15,14 +14,25 @@ wechatauto_logs/
 导出*.txt
 *.decrypted.db
 .keys.json
-
 # 表情包随仓库一起入库（2026-10-30 用户确认）
-
 # 编辑器
 .idea/
 .vscode/
 chatgpt_images/
-
 # 本地私密文件（含内网地址/密钥/聊天数据），绝不入库
 start_bot.cmd
 _llm_distill.py
+# 管理后台写出的机器人配置（含内网地址/密钥）
+bot_config.json
+# 机器人运行时产生的用量记录 / 见过的会话列表（含群名，不入库）
+usage.jsonl*
+known_chats.json*
+# 工具本地状态 / 个人聊天记录 / 宣传片渲染帧（含聊天截图素材，绝不入库）
+.claude/
+.zcode/
+*上下文.txt
+probe_tmp.py
+promo/_frames*/
+
+# 宣传片成片（单文件 85-94MB，GitHub 拒收 >100MB，不入库；渲染脚本和帧已按上面规则处理）
+promo/*.mp4
