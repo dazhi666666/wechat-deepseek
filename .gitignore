@@ -34,5 +34,10 @@ known_chats.json*
 probe_tmp.py
 promo/_frames*/
 
+# 个人一次性脚本 / 群聊数据（含真实群 ID 与聊天内容，绝不入库）
+grab_server_images.py
+服务器话题.txt
+群图片_服务器话题/
+
 # 宣传片成片（单文件 85-94MB，GitHub 拒收 >100MB，不入库；渲染脚本和帧已按上面规则处理）
 promo/*.mp4

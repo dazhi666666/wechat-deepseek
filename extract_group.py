@@ -63,10 +63,8 @@ def main() -> None:
         except Exception:
             members[w] = w
     print(f'成员昵称映射: {len(members)} 人')
-    # 先摸清谁是"刀哥"
     for w, n in members.items():
-        if '刀' in n:
-            print(f'  疑似: {n} ({w})')
+        print(f'  {n} ({w})')
 
     # 翻页拉取
     rows = []

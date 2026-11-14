@@ -813,7 +813,7 @@ wc.SendMsg("开会了", at=["全体成员"])
 ### 10.3 群聊监听 / Listen to a group
 
 ```python
-lst.add_listener("44054166277@chatroom", on_msg)   # 用群 username
+lst.add_listener("1234567890@chatroom", on_msg)   # 用群 username
 ```
 
 ### 10.4 群聊图片 / 语音 / Group images & voice

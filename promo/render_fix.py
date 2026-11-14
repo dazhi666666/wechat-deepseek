@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-FILM_DIR = r'C:\Users\user\AppData\Local\Temp\claude\D--wechat-deepseek\3e6ea8e8-e796-400f-8f07-af9aadbe4030\scratchpad\film'
+FILM_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_film')
 sys.path.insert(0, FILM_DIR)
 
 
