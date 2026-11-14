@@ -40,10 +40,11 @@ STICKER_DIR = os.path.join(ROOT, 'stickers')
 STICKER_EXTS = ('.gif', '.jpg', '.jpeg', '.png', '.webp', '.bmp')
 
 # 管理页可编辑的配置项：键名与 dafeiyu_bot._OVERRIDABLE 保持一致
-CONFIG_KEYS = ('API_HOSTS', 'API_PORT', 'API_KEY', 'MODEL', 'AT_NAME',
+CONFIG_KEYS = ('API_HOSTS', 'API_PORT', 'API_KEY', 'MODEL', 'AT_NAMES',
                'RECENT_N', 'MAX_TOKENS', 'LLM_TIMEOUT', 'TOOL_ROUNDS',
-               'SEARCH_DAYS', 'CONTEXT_TOKEN_LIMIT', 'CHATGPT_COOLDOWN',
-               'CHATGPT_TIMEOUT', 'SEND_RETRIES', 'SYSTEM_PROMPT', 'FAIL_REPLY')
+               'SEARCH_DAYS', 'CONTEXT_TOKEN_LIMIT', 'CHATGPT_ENABLED',
+               'CHATGPT_COOLDOWN', 'CHATGPT_TIMEOUT', 'SEND_RETRIES',
+               'SYSTEM_PROMPT', 'FAIL_REPLY')
 _ENV_KEYS = {'WECHAT_DEEPSEEK_API_HOSTS': 'API_HOSTS',
              'WECHAT_DEEPSEEK_API_PORT': 'API_PORT',
              'WECHAT_DEEPSEEK_API_KEY': 'API_KEY',
@@ -105,7 +106,7 @@ def load_config() -> dict:
     cfg = _source_defaults()
     cfg.update(_start_cmd_env())
     try:
-        with open(CONFIG_FILE, encoding='utf-8') as f:
+        with open(CONFIG_FILE, encoding='utf-8-sig') as f:
             cfg.update({k: v for k, v in json.load(f).items() if k in CONFIG_KEYS})
     except (OSError, ValueError):
         pass
@@ -118,10 +119,14 @@ def save_config(data: dict) -> dict:
         if k not in data:
             continue
         v = data[k]
-        if k == 'API_HOSTS':
+        if k in ('API_HOSTS', 'AT_NAMES'):
             if isinstance(v, str):
                 v = re.split(r'[,\s]+', v)
             v = [str(h).strip() for h in v if str(h).strip()]
+        elif isinstance(cfg.get(k), bool) or k == 'CHATGPT_ENABLED':
+            # bool 是 int 的子类，必须放在 int 分支前面判断
+            v = v if isinstance(v, bool) else \
+                str(v).strip().lower() in ('1', 'true', 'yes', 'on', '开', '是')
         elif isinstance(cfg.get(k), int) or k in ('API_PORT',):
             v = int(v)
         else:
@@ -135,7 +140,7 @@ def save_config(data: dict) -> dict:
 
 def _read_raw_config() -> dict:
     try:
-        with open(CONFIG_FILE, encoding='utf-8') as f:
+        with open(CONFIG_FILE, encoding='utf-8-sig') as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
@@ -706,9 +711,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'config': load_config(),
                                    'file_exists': os.path.exists(CONFIG_FILE)})
             if p == '/api/agents':
+                d = load_config()
+                at = (d.get('AT_NAMES') or ['大肥鱼'])[0]
                 return self._json({'agents': load_agents(), 'tools': TOOL_NAMES,
-                                   'defaults': {k: load_config().get(k) for k in
-                                                ('AT_NAME', 'MODEL', 'MAX_TOKENS', 'RECENT_N')}})
+                                   'defaults': {'AT_NAME': at,
+                                                'MODEL': d.get('MODEL'),
+                                                'MAX_TOKENS': d.get('MAX_TOKENS'),
+                                                'RECENT_N': d.get('RECENT_N')}})
             if p == '/api/chats':
                 return self._json(list_chats())
             if p == '/api/usage':

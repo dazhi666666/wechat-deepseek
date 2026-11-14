@@ -409,6 +409,45 @@ class ScreenOCR:
     def available() -> bool:
         return bool(getattr(WxParam, "ENABLE_OCR", True))
 
+    # OCR 专用 MTA 工作线程（懒创建，进程内唯一），见 _ocr_loop 的说明。
+    _ocr_lock = threading.Lock()
+    _ocr_loop_ref = None
+
+    @classmethod
+    def _ocr_loop(cls):
+        """返回 OCR 专用后台线程里的事件循环。
+
+        为什么不在调用线程里跑：``uiautomation`` / ``comtypes`` 会把调用它的
+        线程 COM 初始化成 **STA**。STA 上的 WinRT 异步回调要靠窗口消息泵送达，
+        而本进程没人泵消息，``recognize_async()`` 的 await 就永远不完成——表现
+        是**每条 OCR 都卡满 8s 超时、返回空列表**（实测：同一张图，导入
+        wechatauto 之前 0.17s 出结果，导入之后 10s 超时）。换到 MTA 线程里跑，
+        WinRT 走线程池回调、不需要泵，实测 0.06s 出结果。
+        """
+        with cls._ocr_lock:
+            if cls._ocr_loop_ref is not None:
+                return cls._ocr_loop_ref
+            ready = threading.Event()
+            holder: Dict[str, object] = {}
+
+            def _worker() -> None:
+                try:
+                    # COINIT_MULTITHREADED = 0x0：MTA 不需要消息泵
+                    ctypes.windll.ole32.CoInitializeEx(None, 0x0)
+                except Exception:
+                    pass
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                holder['loop'] = loop
+                ready.set()
+                loop.run_forever()
+
+            threading.Thread(target=_worker, daemon=True,
+                             name='wechatauto-ocr').start()
+            ready.wait(10)
+            cls._ocr_loop_ref = holder.get('loop')
+            return cls._ocr_loop_ref
+
     @staticmethod
     def recognize(image: Image.Image) -> List[Tuple[str, int, int, int, int]]:
         if not ScreenOCR.available():
@@ -418,6 +457,7 @@ class ScreenOCR:
                 wxlog.info('WxParam.ENABLE_OCR=False：OCR 全部停用，相关功能改走 UIA，'
                            '没有 UIA 等价物的操作会明确失败（不盲点坐标）')
             return []
+        from concurrent.futures import TimeoutError as FutureTimeout
         from winsdk.windows.media.ocr import OcrEngine
         from winsdk.windows.graphics.imaging import BitmapDecoder
         from winsdk.windows.storage import StorageFile
@@ -453,9 +493,15 @@ class ScreenOCR:
                 except OSError:
                     pass
 
+        loop = ScreenOCR._ocr_loop()
+        if loop is None:
+            wxlog.debug('OCR 工作线程没起来，跳过本次识别')
+            return []
+        future = asyncio.run_coroutine_threadsafe(_run(), loop)
         try:
-            return asyncio.run(asyncio.wait_for(_run(), timeout=8))
-        except asyncio.TimeoutError:
+            return future.result(timeout=8)
+        except FutureTimeout:
+            future.cancel()
             wxlog.debug('OCR 识别超时（8s）')
             return []
         except Exception as e:
@@ -537,9 +583,13 @@ class WeChatGUI:
     def _looks_like_main_window(self, hwnd: int) -> bool:
         """多特征联合判断是否为微信主窗口（类名只是软条件之一）。
 
-        特征：标题含微信关键字 / 类名前缀 Qt51514QWindowIcon* /
+        特征：标题为「微信」/ 类名前缀 Qt51514QWindowIcon* /
         进程名为 weixin.exe / 可见 / 尺寸 >= MIN_WINDOW_SIZE。任一项都不
         单独成立，评分（权重和）>=5 才认可，防止 Qt 升级改名后失效。
+
+        进程名是一条硬否决：别的程序完全可能把「微信」写进标题（DSH 的窗口
+        标题是「会话名 — DeepSeek Harness」，会话名带「微信」时就是活例子），
+        标题只做弱加分，不能单选它。
         """
         u = self._input._user32
         if not u.IsWindow(hwnd) or not u.IsWindowVisible(hwnd):
@@ -549,12 +599,17 @@ class WeChatGUI:
         u.GetWindowTextW(hwnd, buf, 256)
         u.GetClassNameW(hwnd, cls, 256)
         title, cls_name = buf.value.strip(), cls.value
+        pname = self._process_name(self._get_pid(hwnd))
+        if pname and pname != PROCESS_NAME:
+            return False
         score = 0
-        if any(k in title for k in MAIN_TITLE_KEYWORDS):
+        if title == WX_MAIN_WIN_TITLE:
             score += 5
+        elif any(k in title for k in MAIN_TITLE_KEYWORDS):
+            score += 2          # 只沾个关键字，不足以单独选中（2+尺寸 2 < 5）
         if cls_name.startswith(WX_MAIN_WIN_CLASS_PREFIX):
             score += 4
-        if self._process_name(self._get_pid(hwnd)) == PROCESS_NAME:
+        if pname == PROCESS_NAME:
             score += 3
         rr = wintypes.RECT()
         u.GetWindowRect(hwnd, ctypes.byref(rr))
@@ -569,6 +624,9 @@ class WeChatGUI:
 
         类名前缀不再是硬条件（Qt 升级 Qt51514→Qt6xxx 后会改名），改为在
         所有可见顶层窗口中按「标题/类名/进程名/可见/尺寸」评分，取最高分。
+        非 weixin.exe 的窗口直接排除：标题里带「微信」的程序不止微信一家
+        （DSH 的窗口标题就是「会话名 — DeepSeek Harness」），一旦认错窗口，
+        后面置顶、OCR、点击全都会打在别人身上。
         找不到时退回按标题精确查找。
         """
         u = self._input._user32
@@ -585,12 +643,17 @@ class WeChatGUI:
             title_text, cls_name = buf.value.strip(), cls.value
             if not (title_text or cls_name):
                 return True
+            pname = self._process_name(self._get_pid(h))
+            if pname and pname != PROCESS_NAME:
+                return True
             score = 0
-            if any(k in title_text for k in MAIN_TITLE_KEYWORDS):
+            if title_text == WX_MAIN_WIN_TITLE:
                 score += 5
+            elif any(k in title_text for k in MAIN_TITLE_KEYWORDS):
+                score += 2      # 只沾个关键字，不足以单独选中
             if cls_name.startswith(WX_MAIN_WIN_CLASS_PREFIX):
                 score += 4
-            if self._process_name(self._get_pid(h)) == PROCESS_NAME:
+            if pname == PROCESS_NAME:
                 score += 3
             rr = wintypes.RECT()
             u.GetWindowRect(h, ctypes.byref(rr))
